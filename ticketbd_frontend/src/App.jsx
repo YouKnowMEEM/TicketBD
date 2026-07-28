@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import jsPDF from 'jspdf';
 import './App.css';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = 'https://ticketbd.onrender.com';
 
 // --- EXACT BANGLADESH RAILWAY COACH BLUEPRINTS ---
 const COACH_MAPS = {
