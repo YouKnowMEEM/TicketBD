@@ -1,8 +1,6 @@
 require('dotenv').config(); // MUST BE AT THE VERY TOP
 const express = require('express');
 const cors = require('cors');
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -10,8 +8,7 @@ const pool = require('./db');
 const { authenticateToken, authorizeSelfParam, authorizeSelfBody } = require('./middleware/auth');
 
 if (!process.env.JWT_SECRET) {
-    console.error("🛑 JWT_SECRET is missing from your .env file. Add a long random string, e.g:");
-    console.error('   JWT_SECRET=some-long-random-string-at-least-32-chars');
+    console.error("🛑 JWT_SECRET is missing from your .env file.");
     process.exit(1);
 }
 
@@ -29,8 +26,6 @@ function issueToken(user) {
 }
 
 // Helper: lazily settle any refund requests whose journey date has passed
-// without the seat being resold. Called whenever we touch a user's tickets,
-// since there's no cron job running server-side.
 async function finalizeExpiredRefunds(connection, username) {
     await connection.query(`
         UPDATE RefundRequest rr
@@ -45,7 +40,7 @@ async function finalizeExpiredRefunds(connection, username) {
 }
 
 // ==========================================
-// 🚀 API ROUTE: SIGNUP & SEND VERIFICATION EMAIL (UPDATED FOR RESEND)
+// 🚀 API ROUTE: SIGNUP & SEND VERIFICATION EMAIL (BREVO HTTP API)
 // ==========================================
 app.post('/api/signup', async (req, res) => {
     const { studentId, mobile, password } = req.body;
@@ -76,34 +71,44 @@ app.post('/api/signup', async (req, res) => {
         console.log(`=======================================================\n`);
 
         try {
-            const { data, error } = await resend.emails.send({
-                from: 'onboarding@resend.dev', // Resend's required testing address
-                to: studentEmail,
-                subject: 'TicketBD - Verify Your CUET Student Account',
-                html: `
-                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-                  <h2 style="color: #0b6e4f;">Welcome to TicketBD 🇧🇩</h2>
-                  <p>Hello CUETian,</p>
-                  <p>You recently created an account with Student ID: <strong>${studentId}</strong>.</p>
-                  <p>Please click the button below to verify your student email address and activate your account:</p>
-                  <a href="${verificationLink}"
-                     style="display: inline-block; padding: 12px 24px; background-color: #0b6e4f; color: #ffffff; text-decoration: none; border-radius: 4px; font-weight: bold; margin-top: 15px;">
-                    VERIFY MY ACCOUNT
-                  </a>
-                </div>
-              `
+            const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+                method: 'POST',
+                headers: {
+                    'accept': 'application/json',
+                    'api-key': process.env.BREVO_API_KEY,
+                    'content-type': 'application/json'
+                },
+                body: JSON.stringify({
+                    sender: { name: 'TicketBD', email: process.env.EMAIL_USER },
+                    to: [{ email: studentEmail }],
+                    subject: 'TicketBD - Verify Your CUET Student Account',
+                    htmlContent: `
+                    <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                      <h2 style="color: #0b6e4f;">Welcome to TicketBD 🇧🇩</h2>
+                      <p>Hello CUETian,</p>
+                      <p>You recently created an account with Student ID: <strong>${studentId}</strong>.</p>
+                      <p>Please click the button below to verify your student email address and activate your account:</p>
+                      <a href="${verificationLink}"
+                         style="display: inline-block; padding: 12px 24px; background-color: #0b6e4f; color: #ffffff; text-decoration: none; border-radius: 4px; font-weight: bold; margin-top: 15px;">
+                        VERIFY MY ACCOUNT
+                      </a>
+                    </div>
+                  `
+                })
             });
 
-            if (error) {
-                console.log("⚠️ Email sending failed via Resend API, but account was saved.", error);
+            const data = await response.json();
+
+            if (!response.ok) {
+                console.log("⚠️ Brevo email API returned an error:", data);
                 return res.status(200).json({ message: `Success! [DEV MODE] Check your server terminal for the verification link.` });
             }
 
-            console.log('Email sent successfully via Resend:', data);
-            res.status(200).json({ message: `Success! Verification email sent to ${studentEmail}. (Check terminal if offline)` });
+            console.log('✅ Email sent successfully via Brevo:', data);
+            res.status(200).json({ message: `Success! Verification email sent to ${studentEmail}.` });
 
         } catch (emailError) {
-            console.log("⚠️ Email sending failed unexpectedly, but account was saved.", emailError);
+            console.log("⚠️ Email network request failed:", emailError);
             res.status(200).json({ message: `Success! [DEV MODE] Check your server terminal for the verification link.` });
         }
     } catch (error) {
@@ -473,7 +478,6 @@ app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId')
         );
         const depTime = stoppage.length > 0 && stoppage[0].departure_time ? stoppage[0].departure_time : '06:00:00';
 
-        // Safe YYYY-MM-DD parsing avoiding timezone rollback
         let formattedDate;
         if (ticket.journey_date instanceof Date) {
             const y = ticket.journey_date.getFullYear();
@@ -488,7 +492,6 @@ app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId')
         const currentTime = new Date().getTime();
         const hoursLeft = (journeyDateTime - currentTime) / (1000 * 60 * 60);
 
-        // 🛑 ENFORCED GUARD: Journey date/time has passed or departs in < 6 hours
         if (hoursLeft <= 0) {
             throw new Error("Cannot cancel ticket. The train has already departed or the journey date/time has passed.");
         }
@@ -507,7 +510,7 @@ app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId')
             deduction = Math.max(40, baseFare * 0.25);
         } else if (hoursLeft > 12) {
             deduction = Math.max(40, baseFare * 0.50);
-        } else { // 6 <= hoursLeft <= 12
+        } else {
             deduction = Math.max(40, baseFare * 0.75);
         }
 
