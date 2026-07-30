@@ -87,7 +87,7 @@ app.post('/api/signup', async (req, res) => {
         await pool.query(insertQuery, [studentId, studentId, hashedPassword, studentEmail, mobile]);
         console.log(`\n✅ Saved user ${studentId} to DB!`);
 
-        const verificationLink = `http://localhost:5173/?verify=${studentId}`;
+        const verificationLink = `https://ticketbd.onrender.com/?verify=${studentId}`;
         console.log(`=======================================================`);
         console.log(`🔗 DEV MODE VERIFICATION LINK FOR TESTING:`);
         console.log(`👉 ${verificationLink}`);
