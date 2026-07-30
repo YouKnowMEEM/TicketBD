@@ -1,7 +1,8 @@
 require('dotenv').config(); // MUST BE AT THE VERY TOP
 const express = require('express');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -17,26 +18,6 @@ if (!process.env.JWT_SECRET) {
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-// ==========================================
-// 📧 NODEMAILER CONFIGURATION
-// ==========================================
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    },
-    family: 4
-});
-
-transporter.verify((error) => {
-    if (error) {
-        console.log("Email Config Error:", error);
-    } else {
-        console.log("✅ Server is ready to send verification emails");
-    }
-});
 
 // Helper: mint a signed session token for a user row
 function issueToken(user) {
@@ -64,7 +45,7 @@ async function finalizeExpiredRefunds(connection, username) {
 }
 
 // ==========================================
-// 🚀 API ROUTE: SIGNUP & SEND VERIFICATION EMAIL
+// 🚀 API ROUTE: SIGNUP & SEND VERIFICATION EMAIL (UPDATED FOR RESEND)
 // ==========================================
 app.post('/api/signup', async (req, res) => {
     const { studentId, mobile, password } = req.body;
@@ -94,29 +75,35 @@ app.post('/api/signup', async (req, res) => {
         console.log(`👉 ${verificationLink}`);
         console.log(`=======================================================\n`);
 
-        const mailOptions = {
-            from: process.env.EMAIL_USER,
-            to: studentEmail,
-            subject: 'TicketBD - Verify Your CUET Student Account',
-            html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-          <h2 style="color: #0b6e4f;">Welcome to TicketBD 🇧🇩</h2>
-          <p>Hello CUETian,</p>
-          <p>You recently created an account with Student ID: <strong>${studentId}</strong>.</p>
-          <p>Please click the button below to verify your student email address and activate your account:</p>
-          <a href="${verificationLink}"
-             style="display: inline-block; padding: 12px 24px; background-color: #0b6e4f; color: #ffffff; text-decoration: none; border-radius: 4px; font-weight: bold; margin-top: 15px;">
-            VERIFY MY ACCOUNT
-          </a>
-        </div>
-      `
-        };
-
         try {
-            await transporter.sendMail(mailOptions);
+            const { data, error } = await resend.emails.send({
+                from: 'onboarding@resend.dev', // Resend's required testing address
+                to: studentEmail,
+                subject: 'TicketBD - Verify Your CUET Student Account',
+                html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                  <h2 style="color: #0b6e4f;">Welcome to TicketBD 🇧🇩</h2>
+                  <p>Hello CUETian,</p>
+                  <p>You recently created an account with Student ID: <strong>${studentId}</strong>.</p>
+                  <p>Please click the button below to verify your student email address and activate your account:</p>
+                  <a href="${verificationLink}"
+                     style="display: inline-block; padding: 12px 24px; background-color: #0b6e4f; color: #ffffff; text-decoration: none; border-radius: 4px; font-weight: bold; margin-top: 15px;">
+                    VERIFY MY ACCOUNT
+                  </a>
+                </div>
+              `
+            });
+
+            if (error) {
+                console.log("⚠️ Email sending failed via Resend API, but account was saved.", error);
+                return res.status(200).json({ message: `Success! [DEV MODE] Check your server terminal for the verification link.` });
+            }
+
+            console.log('Email sent successfully via Resend:', data);
             res.status(200).json({ message: `Success! Verification email sent to ${studentEmail}. (Check terminal if offline)` });
+
         } catch (emailError) {
-            console.log("⚠️ Email sending failed due to network/DNS, but account was saved.");
+            console.log("⚠️ Email sending failed unexpectedly, but account was saved.", emailError);
             res.status(200).json({ message: `Success! [DEV MODE] Check your server terminal for the verification link.` });
         }
     } catch (error) {
