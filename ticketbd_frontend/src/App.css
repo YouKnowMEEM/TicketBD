@@ -57,6 +57,18 @@ button { font-family: var(--font-body); }
 }
 .input-field:disabled { background: #f1f1ee; color: var(--ink-soft); cursor: not-allowed; }
 
+/* ============ Date Input Calendar Icon Fix ============ */
+.input-field[type="date"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.15s ease, filter 0.15s ease;
+}
+.input-field[type="date"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+    /* Tints the default calendar icon to match your rail-green theme */
+    filter: invert(29%) sepia(85%) saturate(464%) hue-rotate(113deg) brightness(92%) contrast(93%);
+}
+
 /* ============ Buttons ============ */
 .btn {
     font-family: var(--font-body);
@@ -163,7 +175,7 @@ button { font-family: var(--font-body); }
 .seat.booked { background-color: var(--amber); border: 2px solid var(--amber); color: #3a2b04; cursor: not-allowed; opacity: 0.75; }
 .seat.empty-space { width: 52px; height: 52px; visibility: hidden; }
 
-/* ============ Ticket stub (signature element) ============ */
+/* ============ Ticket stub ============ */
 .ticket-stub {
     position: relative;
     background: var(--card);
