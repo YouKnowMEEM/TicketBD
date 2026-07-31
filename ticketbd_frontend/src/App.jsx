@@ -599,20 +599,25 @@ export function App() {
         setCheckoutLoading(true);
 
         try {
-            const response = await authFetch(`${API_BASE}/api/checkout`, {
+            // 1. Grab your user's token (adjust if you store it differently, like in sessionStorage)
+            const token = localStorage.getItem('token');
+
+            // 2. Use standard fetch so we guarantee the Content-Type header stays intact
+            const response = await fetch(`${API_BASE}/api/checkout`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
                 },
-                body: checkoutPayload
+                body: JSON.stringify(checkoutPayload) // Back to stringify!
             });
 
-            const data = await response.json();
-            console.log("3. Backend Response Message:", data);
-
             if (response.status === 401 || response.status === 403) {
-                return handleSessionExpired();
+                return handleSessionExpired(); // Assuming this is defined in your component
             }
+
+            const data = await response.json();
+            console.log("3. Backend Response:", data);
 
             if (data.success) {
                 alert("Booking confirmed! Your tickets have been generated.");
