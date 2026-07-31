@@ -569,6 +569,7 @@ export function App() {
         const fromId = getStationIdByName(fromStationName);
         const toId = getStationIdByName(toStationName);
 
+        // 1. Package the data exactly how the backend expects it
         const checkoutPayload = {
             userId: studentId,
             trainId: trainId,
@@ -576,16 +577,23 @@ export function App() {
             endStationId: toId,
             journeyDate: journeyDate,
             paymentMethod: 'bKash',
-            selectedSeats: selectedSeats.map(seat => ({ seat_id: seat.id }))
+            // The backend is specifically looking for this 'bookings' array!
+            bookings: selectedSeats.map(seat => ({ seat_id: seat.id }))
         };
 
         setCheckoutLoading(true);
+
         try {
+            // 2. Send it to the backend using authFetch
             const response = await authFetch(`${API_BASE}/api/checkout`, {
                 method: 'POST',
                 body: JSON.stringify(checkoutPayload)
             });
-            if (response.status === 401 || response.status === 403) return handleSessionExpired();
+
+            if (response.status === 401 || response.status === 403) {
+                return handleSessionExpired();
+            }
+
             const data = await response.json();
 
             if (data.success) {

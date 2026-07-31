@@ -284,7 +284,6 @@ app.get('/api/seats', async (req, res) => {
     const { trainId, coachName, journeyDate } = req.query;
 
     try {
-        // 👇 FIX: Added the proper locked_until check so expired seats become available again
         const query = `
             SELECT
                 s.seat_id,
@@ -309,6 +308,39 @@ app.get('/api/seats', async (req, res) => {
 });
 
 // ==========================================
+// 📊 NEW API ROUTE: DYNAMIC COACH AVAILABILITY (public)
+// ==========================================
+app.get('/api/coach-availability', async (req, res) => {
+    const { trainId, journeyDate, coachName } = req.query;
+
+    try {
+        const [rows] = await pool.query(`
+            SELECT
+                (SELECT COUNT(*) FROM Seat WHERE train_id = ? AND coach_name = ?) AS total_seats,
+                COUNT(b.booking_id) AS booked_seats
+            FROM Seat s
+            LEFT JOIN Booking b ON s.seat_id = b.seat_id
+                AND b.journey_date = ?
+                AND (
+                    b.status = 'CONFIRMED'
+                    OR (b.status = 'PENDING' AND b.locked_until > NOW())
+                )
+            WHERE s.train_id = ? AND s.coach_name = ?
+        `, [trainId, coachName, journeyDate, trainId, coachName]);
+
+        const total = rows[0].total_seats;
+        const booked = rows[0].booked_seats;
+        const available = total - booked;
+
+        res.json({ success: true, totalSeats: total, bookedSeats: booked, availableSeats: available });
+    } catch (error) {
+        console.error("Error fetching coach availability:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+
+// ==========================================
 // 🔒 API ROUTE: LOCK SEATS FOR 4 MINUTES (auth required, self only)
 // ==========================================
 app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), async (req, res) => {
@@ -330,16 +362,23 @@ app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), asyn
         `);
 
         // ---------------------------------------------------------
-        // 🛑 VALIDATION 1: Maximum 4 seats per train per day
+        // 🛑 VALIDATION 1: Maximum 4 seats ACROSS ALL UPCOMING TRIPS
         // ---------------------------------------------------------
-        const [existingSeatsOnTrain] = await connection.query(`
-            SELECT COUNT(*) as count FROM Booking
-            WHERE user_id = ? AND train_id = ? AND journey_date = ? AND status IN ('CONFIRMED', 'PENDING')
-        `, [userId, trainId, journeyDate]);
+        const [activeSeats] = await connection.query(`
+            SELECT COUNT(*) AS count
+            FROM Booking b
+            JOIN Stoppage s ON b.train_id = s.train_id AND b.end_station_id = s.station_id
+            WHERE b.user_id = ?
+              AND (
+                  (b.status = 'PENDING' AND b.locked_until > NOW())
+                  OR
+                  (b.status = 'CONFIRMED' AND TIMESTAMP(b.journey_date, s.arrival_time) > NOW())
+              )
+        `, [userId]);
 
-        const alreadyBookedCount = existingSeatsOnTrain[0].count;
+        const alreadyBookedCount = activeSeats[0].count;
         if (alreadyBookedCount + selectedSeats.length > 4) {
-            throw new Error(`Maximum 4 seats allowed. You already have ${alreadyBookedCount} seats booked or locked on this journey.`);
+            throw new Error(`Maximum 4 active seats allowed across all upcoming trips. You already have ${alreadyBookedCount} active or locked seats.`);
         }
 
         // ---------------------------------------------------------
@@ -537,7 +576,7 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
                      JOIN Payment p ON t.ticket_id = p.ticket_id
                      LEFT JOIN RefundRequest rr ON t.ticket_id = rr.ticket_id
             WHERE t.user_id = ? AND t.journey_date >= DATE_SUB(CURDATE(), INTERVAL 15 DAY)
-            ORDER BY t.journey_date DESC, t.issue_time DESC
+            ORDER BY p.payment_time DESC, t.journey_date DESC
         `;
         const [tickets] = await connection.query(query, [userId]);
         res.json({ success: true, tickets });
@@ -550,89 +589,106 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
 });
 
 // ==========================================
-// 🚫 API ROUTE: CANCEL TICKET & CALCULATE REFUND (auth required, self only)
+// 🚫 API ROUTE: CANCEL TICKETS & CALCULATE REFUND (auth required, self only)
 // ==========================================
-app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId'), async (req, res) => {
-    const { ticketId, studentId } = req.body;
+app.post('/api/cancel-tickets', authenticateToken, authorizeSelfBody('studentId'), async (req, res) => {
+    const { ticketIdsToCancel, studentId } = req.body;
     const connection = await pool.getConnection();
+
+    if (!Array.isArray(ticketIdsToCancel) || ticketIdsToCancel.length === 0) {
+        return res.status(400).json({ success: false, message: "No tickets selected for cancellation." });
+    }
 
     try {
         await connection.beginTransaction();
 
-        const [ticketInfo] = await connection.query(
-            `SELECT t.price_paid, t.journey_date, b.booking_id, b.train_id, b.start_station_id
-             FROM Ticket t
-                      JOIN Booking b ON t.booking_id = b.booking_id
-             WHERE t.ticket_id = ? AND t.user_id = ? AND t.status = 'ACTIVE'`,
-            [ticketId, studentId]
-        );
+        let totalPotentialRefund = 0;
+        let cancelledCount = 0;
 
-        if (ticketInfo.length === 0) {
-            throw new Error("Active ticket not found.");
+        for (const ticketId of ticketIdsToCancel) {
+            const [ticketInfo] = await connection.query(
+                `SELECT t.price_paid, t.journey_date, b.booking_id, b.train_id, b.start_station_id
+                 FROM Ticket t
+                          JOIN Booking b ON t.booking_id = b.booking_id
+                 WHERE t.ticket_id = ? AND t.user_id = ? AND t.status = 'ACTIVE'`,
+                [ticketId, studentId]
+            );
+
+            // Skip if ticket is already cancelled or invalid
+            if (ticketInfo.length === 0) {
+                continue;
+            }
+            const ticket = ticketInfo[0];
+
+            const [stoppage] = await connection.query(
+                'SELECT departure_time FROM Stoppage WHERE train_id = ? AND station_id = ?',
+                [ticket.train_id, ticket.start_station_id]
+            );
+            const depTime = stoppage.length > 0 && stoppage[0].departure_time ? stoppage[0].departure_time : '06:00:00';
+
+            let formattedDate;
+            if (ticket.journey_date instanceof Date) {
+                const y = ticket.journey_date.getFullYear();
+                const m = String(ticket.journey_date.getMonth() + 1).padStart(2, '0');
+                const d = String(ticket.journey_date.getDate()).padStart(2, '0');
+                formattedDate = `${y}-${m}-${d}`;
+            } else {
+                formattedDate = String(ticket.journey_date).split('T')[0];
+            }
+
+            const journeyDateTime = new Date(`${formattedDate}T${depTime}+06:00`).getTime();
+            const currentTime = new Date().getTime();
+            const hoursLeft = (journeyDateTime - currentTime) / (1000 * 60 * 60);
+
+            if (hoursLeft <= 0) {
+                throw new Error(`Cannot cancel ticket #${ticketId}. The train has already departed or the journey date/time has passed.`);
+            }
+
+            if (hoursLeft < 6) {
+                throw new Error(`Ticket #${ticketId} cannot be cancelled less than 6 hours before departure.`);
+            }
+
+            const serviceCharge = 20.00;
+            const baseFare = parseFloat(ticket.price_paid) - serviceCharge;
+            let deduction;
+
+            if (hoursLeft > 48) {
+                deduction = Math.max(40, baseFare * 0.10);
+            } else if (hoursLeft > 24) {
+                deduction = Math.max(40, baseFare * 0.25);
+            } else if (hoursLeft > 12) {
+                deduction = Math.max(40, baseFare * 0.50);
+            } else {
+                deduction = Math.max(40, baseFare * 0.75);
+            }
+
+            const potentialRefund = Math.max(0, baseFare - deduction);
+
+            await connection.query(`UPDATE Ticket SET status = 'CANCELLED' WHERE ticket_id = ?`, [ticketId]);
+            await connection.query(`UPDATE Booking SET status = 'CANCELLED' WHERE booking_id = ?`, [ticket.booking_id]);
+
+            await connection.query(
+                `INSERT INTO RefundRequest (ticket_id, original_user_id, time_before_journey_hours, potential_partial_refund, status)
+                 VALUES (?, ?, ?, ?, 'PENDING_RESALE')`,
+                [ticketId, studentId, Math.floor(hoursLeft), potentialRefund]
+            );
+
+            totalPotentialRefund += potentialRefund;
+            cancelledCount++;
         }
-        const ticket = ticketInfo[0];
 
-        const [stoppage] = await connection.query(
-            'SELECT departure_time FROM Stoppage WHERE train_id = ? AND station_id = ?',
-            [ticket.train_id, ticket.start_station_id]
-        );
-        const depTime = stoppage.length > 0 && stoppage[0].departure_time ? stoppage[0].departure_time : '06:00:00';
-
-        let formattedDate;
-        if (ticket.journey_date instanceof Date) {
-            const y = ticket.journey_date.getFullYear();
-            const m = String(ticket.journey_date.getMonth() + 1).padStart(2, '0');
-            const d = String(ticket.journey_date.getDate()).padStart(2, '0');
-            formattedDate = `${y}-${m}-${d}`;
-        } else {
-            formattedDate = String(ticket.journey_date).split('T')[0];
+        if (cancelledCount === 0) {
+            throw new Error("No valid active tickets found to cancel.");
         }
-
-        const journeyDateTime = new Date(`${formattedDate}T${depTime}+06:00`).getTime();
-        const currentTime = new Date().getTime();
-        const hoursLeft = (journeyDateTime - currentTime) / (1000 * 60 * 60);
-
-        if (hoursLeft <= 0) {
-            throw new Error("Cannot cancel ticket. The train has already departed or the journey date/time has passed.");
-        }
-
-        if (hoursLeft < 6) {
-            throw new Error("Tickets cannot be cancelled less than 6 hours before departure.");
-        }
-
-        const serviceCharge = 20.00;
-        const baseFare = parseFloat(ticket.price_paid) - serviceCharge;
-        let deduction;
-
-        if (hoursLeft > 48) {
-            deduction = Math.max(40, baseFare * 0.10);
-        } else if (hoursLeft > 24) {
-            deduction = Math.max(40, baseFare * 0.25);
-        } else if (hoursLeft > 12) {
-            deduction = Math.max(40, baseFare * 0.50);
-        } else {
-            deduction = Math.max(40, baseFare * 0.75);
-        }
-
-        const potentialRefund = Math.max(0, baseFare - deduction);
-
-        await connection.query(`UPDATE Ticket SET status = 'CANCELLED' WHERE ticket_id = ?`, [ticketId]);
-        await connection.query(`UPDATE Booking SET status = 'CANCELLED' WHERE booking_id = ?`, [ticket.booking_id]);
-
-        await connection.query(
-            `INSERT INTO RefundRequest (ticket_id, original_user_id, time_before_journey_hours, potential_partial_refund, status)
-             VALUES (?, ?, ?, ?, 'PENDING_RESALE')`,
-            [ticketId, studentId, Math.floor(hoursLeft), potentialRefund]
-        );
 
         await connection.commit();
         res.json({
             success: true,
-            message: `Ticket cancelled. If your seat is bought by another passenger, you'll get a full refund. Otherwise, your estimated refund after the journey date is ৳${potentialRefund.toFixed(2)}.`
+            message: `Successfully cancelled ${cancelledCount} ticket(s). If your seat(s) are bought by another passenger, you'll get a full refund. Otherwise, your estimated refund after the journey date is ৳${totalPotentialRefund.toFixed(2)}.`
         });
     } catch (error) {
         await connection.rollback();
-        console.error("Error cancelling ticket:", error);
+        console.error("Error cancelling tickets:", error);
         res.status(400).json({ success: false, message: error.message });
     } finally {
         connection.release();
