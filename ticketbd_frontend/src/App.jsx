@@ -88,7 +88,7 @@ function Spinner({ dark }) {
     return <span className={`tb-spinner ${dark ? 'dark' : ''}`} />;
 }
 
-// --- DATE FORMAT HELPERS ---
+// --- DATE & TIME FORMAT HELPERS ---
 const formatToDisplayDate = (yyyy_mm_dd) => {
     if (!yyyy_mm_dd) return '';
     const parts = yyyy_mm_dd.split('-');
@@ -99,16 +99,42 @@ const formatToDisplayDate = (yyyy_mm_dd) => {
     return yyyy_mm_dd;
 };
 
-const formatToDbDate = (dd_mm_yyyy) => {
-    if (!dd_mm_yyyy) return '';
-    const parts = dd_mm_yyyy.split('/');
+const formatDateShort = (yyyy_mm_dd) => {
+    if (!yyyy_mm_dd) return '';
+    const parts = yyyy_mm_dd.split('-');
     if (parts.length === 3) {
-        const [d, m, y] = parts;
-        if (d.length === 2 && m.length === 2 && y.length === 4) {
-            return `${y}-${m}-${d}`;
-        }
+        const [y, m, d] = parts;
+        const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+        const monthIdx = parseInt(m, 10) - 1;
+        return `${String(d).padStart(2, '0')} ${months[monthIdx] || ''}`;
     }
-    return '';
+    return yyyy_mm_dd;
+};
+
+const formatTimeAMPM = (timeStr) => {
+    if (!timeStr) return '';
+    const [hStr, mStr] = timeStr.split(':');
+    let h = parseInt(hStr, 10);
+    const m = mStr || '00';
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    if (h === 0) h = 12;
+    return `${String(h).padStart(2, '0')}:${m} ${ampm}`;
+};
+
+const calculateDuration = (startTime, endTime) => {
+    if (!startTime || !endTime) return '00h 00m';
+    const [h1, m1] = startTime.split(':').map(Number);
+    const [h2, m2] = endTime.split(':').map(Number);
+    let startMinutes = h1 * 60 + m1;
+    let endMinutes = h2 * 60 + m2;
+    if (endMinutes < startMinutes) {
+        endMinutes += 24 * 60; // Overnight
+    }
+    const diff = endMinutes - startMinutes;
+    const hours = Math.floor(diff / 60);
+    const mins = diff % 60;
+    return `${String(hours).padStart(2, '0')}h ${String(mins).padStart(2, '0')}m`;
 };
 
 export function App() {
@@ -130,8 +156,8 @@ export function App() {
     // --- Search States ---
     const [fromStationName, setFromStationName] = useState('');
     const [toStationName, setToStationName] = useState('');
-    const [journeyDate, setJourneyDate] = useState(''); // YYYY-MM-DD for DB
-    const [displayDate, setDisplayDate] = useState(''); // DD/MM/YYYY for UI
+    const [journeyDate, setJourneyDate] = useState('');
+    const [displayDate, setDisplayDate] = useState('');
     const [seatClass, setSeatClass] = useState('Snigdha');
     const [trains, setTrains] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
@@ -147,7 +173,7 @@ export function App() {
     // --- Payment & 4-Minute Lock Modal ---
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [lockedBookingIds, setLockedBookingIds] = useState([]);
-    const [lockSecondsLeft, setLockSecondsLeft] = useState(240); // 4 minutes
+    const [lockSecondsLeft, setLockSecondsLeft] = useState(240);
     const [paymentMethod, setPaymentMethod] = useState('bKash');
     const [checkoutLoading, setCheckoutLoading] = useState(false);
     const lockTimerRef = useRef(null);
@@ -178,7 +204,6 @@ export function App() {
     const nativeDatePickerRef = useRef(null);
     const classInputRef = useRef(null);
 
-    // --- DATE LIMIT CALCULATION (Current to Next 10 Days) ---
     const getMinMaxDates = () => {
         const today = new Date();
         const minDate = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
@@ -191,7 +216,6 @@ export function App() {
     };
     const { minDate, maxDate } = getMinMaxDates();
 
-    // --- EFFECT 1: VERIFICATION LINK TRAP ---
     useEffect(() => {
         const searchParams = new URLSearchParams(window.location.search);
         const verifyToken = searchParams.get('verify');
@@ -215,7 +239,6 @@ export function App() {
         }
     }, []);
 
-    // --- EFFECT 2: FETCH STATIONS FROM BACKEND ON LOAD ---
     useEffect(() => {
         fetch(`${API_BASE}/api/stations`)
             .then(res => res.json())
@@ -225,7 +248,6 @@ export function App() {
             .catch(err => console.error("🛑 Failed to load stations from MySQL:", err));
     }, []);
 
-    // --- EFFECT 3: RESTORE SESSION ON PAGE LOAD ---
     useEffect(() => {
         const savedToken = localStorage.getItem('tb_token');
         const savedId = localStorage.getItem('tb_studentId');
@@ -236,7 +258,6 @@ export function App() {
         }
     }, []);
 
-    // --- EFFECT 4: 4-MINUTE LOCK COUNTDOWN TIMER ---
     useEffect(() => {
         if (showPaymentModal && lockSecondsLeft > 0) {
             lockTimerRef.current = setInterval(() => {
@@ -256,21 +277,18 @@ export function App() {
         return () => clearInterval(lockTimerRef.current);
     }, [showPaymentModal, lockSecondsLeft]);
 
-    // --- AUTH-AWARE FETCH HELPER ---
     const authFetch = (url, options = {}) => {
         const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
         if (token) headers['Authorization'] = `Bearer ${token}`;
         return fetch(url, { ...options, headers });
     };
 
-    // --- HELPER: resolve station name to id ---
     const getStationIdByName = (name) => {
         if (!name) return null;
         const match = stationList.find(s => s.name.toLowerCase() === name.trim().toLowerCase());
         return match ? match.id : null;
     };
 
-    // --- SESSION EXPIRY HANDLER ---
     const handleSessionExpired = () => {
         localStorage.removeItem('tb_token');
         localStorage.removeItem('tb_studentId');
@@ -282,7 +300,6 @@ export function App() {
         setAuthMessage('Your session has expired. Please log in again.');
     };
 
-    // --- LOGOUT ---
     const handleLogout = () => {
         localStorage.removeItem('tb_token');
         localStorage.removeItem('tb_studentId');
@@ -295,7 +312,7 @@ export function App() {
     };
 
     // =========================================================================
-    // 🚂 REDESIGNED OFFICIAL BANGLADESH RAILWAY E-TICKET PDF GENERATOR
+    // 🚂 USER'S CUSTOM BANGLADESH RAILWAY E-TICKET PDF GENERATOR
     // =========================================================================
     const generatePDF = (ticket) => {
         const doc = new jsPDF('p', 'mm', 'a4');
@@ -311,13 +328,11 @@ export function App() {
         doc.rect(10, 10, 190, 277);
 
         // 2. Top Header - Logo Emblem & Title
-        // Circular emblem placeholder graphic
         doc.setFillColor(...primaryGreen);
         doc.circle(22, 22, 7, 'F');
-        doc.setFillColor(230, 164, 25); // Gold inner circle
+        doc.setFillColor(230, 164, 25);
         doc.circle(22, 22, 3.5, 'F');
 
-        // Main Title Header
         doc.setTextColor(...primaryGreen);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(16);
@@ -327,7 +342,6 @@ export function App() {
         doc.setFont("helvetica", "bold");
         doc.text('E-TICKET / BOARDING PASS', 105, 26, { align: 'center' });
 
-        // Right side Partner branding & QR Code box
         doc.setFontSize(7);
         doc.setTextColor(100, 100, 100);
         doc.setFont("helvetica", "normal");
@@ -336,31 +350,8 @@ export function App() {
         doc.setTextColor(0, 0, 0);
         doc.text('Bermuda Triangle', 185, 21, { align: 'right' });
 
-        // QR Code Box graphic
-        //doc.setDrawColor(50, 50, 50);
-        //doc.setFillColor(255, 255, 255);
-        //doc.setLineWidth(0.5);
-        //doc.rect(165, 24, 22, 22, 'FD');
-        //doc.setFontSize(6);
-        //doc.setTextColor(80, 80, 80);
-        //doc.text('SCAN QR', 176, 35, { align: 'center' });
-        //doc.setFontSize(5);
-        //doc.text(ticket.transaction_id || 'VERIFY', 176, 38, { align: 'center' });
-
-        // 3. Passenger Greeting Notice
-        // doc.setFontSize(9);
-        // doc.setTextColor(...textDark);
-        // doc.setFont("helvetica", "bold");
-        // doc.text(`Dear CUET Student (${studentId}),`, 15, 36);
-        //
-        // doc.setFont("helvetica", "normal");
-        // doc.setFontSize(8);
-        // const textMsg = "Your request to book e-ticket for your journey in Bangladesh Railway was successful. You can travel on the train mentioned in the ticket subject to showing your NID or Photo ID card. The details of your e-ticket are as below:";
-        // doc.text(doc.splitTextToSize(textMsg, 145), 15, 41);
-
         let curY = 52;
 
-        // 4. Section 1: Journey Information (যাত্রার তথ্য)
         doc.setFillColor(...primaryGreen);
         doc.rect(15, curY, 180, 7, 'F');
         doc.setTextColor(255, 255, 255);
@@ -370,10 +361,10 @@ export function App() {
 
         curY += 7;
 
-        const totalFare = parseFloat(ticket.price_paid || 0);
-        const vat = totalFare * 0.15;
+        const baseFare = parseFloat(ticket.price_paid || 0);
+        const vat = baseFare * 0.15;
         const serviceCharge = 20.00;
-        const baseFare = totalFare * 0.75;
+        const totalFare = baseFare + vat + serviceCharge;
 
         const journeyTableData = [
             ['Issue Date & Time:', new Date(ticket.payment_date || Date.now()).toLocaleString()],
@@ -387,7 +378,7 @@ export function App() {
             ['No. of Passenger(s):', '1'],
             ['Fare:', `BDT ${baseFare.toFixed(2)}`],
             ['VAT:', `BDT ${vat.toFixed(2)}`],
-            //['Service Charge:', `BDT ${serviceCharge.toFixed(2)}`],
+            ['Service Charge:', `BDT ${serviceCharge.toFixed(2)}`],
             ['Total Fare:**', `BDT ${totalFare.toFixed(2)}`]
         ];
 
@@ -421,7 +412,6 @@ export function App() {
             curY += rowHeight;
         });
 
-        // Footnote
         doc.setFontSize(7);
         doc.setFont("helvetica", "normal");
         doc.setTextColor(120, 120, 120);
@@ -429,7 +419,6 @@ export function App() {
 
         curY += 9;
 
-        // 5. Section 2: Passenger Information (যাত্রীর তথ্য)
         doc.setFillColor(...primaryGreen);
         doc.rect(15, curY, 180, 7, 'F');
         doc.setTextColor(255, 255, 255);
@@ -470,7 +459,6 @@ export function App() {
 
         curY += 8;
 
-        // 6. Section 3: Please Note / Important Instructions
         doc.setFontSize(9);
         doc.setFont("helvetica", "bold");
         doc.setTextColor(...textDark);
@@ -494,7 +482,6 @@ export function App() {
 
         curY += 3;
 
-        // 7. Railway Emergency & Police Helpline Banner
         doc.setFillColor(254, 242, 242);
         doc.setDrawColor(239, 68, 68);
         doc.setLineWidth(0.6);
@@ -510,7 +497,6 @@ export function App() {
 
         curY += 16;
 
-        // 8. Footer Farewell
         doc.setFontSize(9);
         doc.setFont("helvetica", "bold");
         doc.setTextColor(...primaryGreen);
@@ -614,7 +600,6 @@ export function App() {
         setProfileSaving(false);
     };
 
-    // --- OPEN CANCELLATION MODAL FOR PARTIAL / FULL SEAT SELECTION ---
     const openCancelModal = (ticketList) => {
         const activeTickets = ticketList.filter(t => t.ticket_status === 'ACTIVE');
         if (activeTickets.length === 0) return;
@@ -636,7 +621,6 @@ export function App() {
         setShowCancelModal(true);
     };
 
-    // --- RECALCULATE CANCELLATION SUMMARY WHEN CHECKBOX SELECTION CHANGES ---
     const toggleCancelTicketSelection = (ticketId) => {
         setSelectedCancelTicketIds(prev => {
             const updated = prev.includes(ticketId)
@@ -661,7 +645,6 @@ export function App() {
         });
     };
 
-    // --- CONFIRM TICKET CANCELLATION HANDLER ---
     const handleConfirmCancellation = async () => {
         if (selectedCancelTicketIds.length === 0) {
             alert("Please select at least one seat to cancel.");
@@ -695,7 +678,7 @@ export function App() {
         setCancelLoading(false);
     };
 
-    // --- SEARCH TRAINS HANDLER ---
+    // --- SEARCH TRAINS HANDLER (WITH PAST DEPARTURE FILTERING) ---
     const searchTrains = async (e) => {
         e.preventDefault();
         if (!isLoggedIn) {
@@ -714,9 +697,26 @@ export function App() {
         }
         setSearchLoading(true);
         try {
-            const response = await fetch(`${API_BASE}/api/trains?fromStation=${fromId}&toStation=${toId}`);
+            const response = await fetch(`${API_BASE}/api/trains?fromStation=${fromId}&toStation=${toId}&journeyDate=${journeyDate}`);
             const data = await response.json();
-            setTrains(data);
+
+            // Client-side past departure filter if searching for TODAY
+            const todayStr = new Date().toISOString().split('T')[0];
+            let filteredTrains = Array.isArray(data) ? data : [];
+
+            if (journeyDate === todayStr) {
+                const now = new Date();
+                const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+                filteredTrains = filteredTrains.filter(train => {
+                    if (!train.start_time) return true;
+                    const [h, m] = train.start_time.split(':').map(Number);
+                    const trainMinutes = h * 60 + m;
+                    return trainMinutes > currentMinutes;
+                });
+            }
+
+            setTrains(filteredTrains);
             setExpandedTrainId(null);
             setSelectedSeats([]);
             setView('results');
@@ -727,7 +727,6 @@ export function App() {
         setSearchLoading(false);
     };
 
-    // --- DYNAMIC SEAT & COACH SUMMARY FETCH ---
     const fetchCoachSeats = async (targetTrainId, targetCoach, targetDate) => {
         setSeatsLoading(true);
         try {
@@ -750,7 +749,6 @@ export function App() {
         }
     };
 
-    // --- SEAT SELECTION HANDLER ---
     const handleSeatSelect = (seatId, seatName, isBooked) => {
         if (isBooked) return;
         setSelectedSeats((prevSelected) => {
@@ -765,7 +763,6 @@ export function App() {
         });
     };
 
-    // --- STEP 1: PROCEED TO PAYMENT (LOCK SEATS FOR 4 MINUTES) ---
     const handleProceedToPayment = async (trainId) => {
         if (selectedSeats.length === 0) {
             alert("Please select at least one seat.");
@@ -807,7 +804,6 @@ export function App() {
         setCheckoutLoading(false);
     };
 
-    // --- STEP 2: FINALIZE CHECKOUT AFTER PAYMENT CONFIRMATION ---
     const handleConfirmPayment = async () => {
         if (lockedBookingIds.length === 0) {
             alert("No locked seats found.");
@@ -850,7 +846,6 @@ export function App() {
         setCheckoutLoading(false);
     };
 
-    // --- VERIFY TICKET (public, no login required) ---
     const handleVerifyTicket = async (e) => {
         e.preventDefault();
         setVerifyError('');
@@ -875,7 +870,6 @@ export function App() {
         setVerifyError('');
     };
 
-    // --- HELPER: CHECK IF TICKET CAN BE CANCELLED ---
     const isCancellable = (journeyDateStr) => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -1548,7 +1542,7 @@ export function App() {
                     </div>
                 )}
 
-                {/* ================= RESULTS PAGE ================= */}
+                {/* ================= RESULTS PAGE (OFFICIAL BANGLADESH RAILWAY SEARCH RESULT CARDS) ================= */}
                 {view === 'results' && (
                     <div>
                         <div style={{
@@ -1565,7 +1559,7 @@ export function App() {
                             <button className="btn btn-amber" style={{ padding: '8px 18px', fontSize: '12px' }} onClick={() => setView('home')}>MODIFY SEARCH</button>
                         </div>
 
-                        <div style={{ maxWidth: '1400px', margin: '25px auto', padding: '0 40px' }}>
+                        <div style={{ maxWidth: '1200px', margin: '25px auto', padding: '0 20px' }}>
                             {Array.isArray(trains) && trains.length > 0 ? (
                                 trains.map((train) => {
                                     const trainClasses = {
@@ -1583,14 +1577,70 @@ export function App() {
                                     };
 
                                     return (
-                                        <div key={train.train_id} className="card" style={{ padding: '25px', marginBottom: '20px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f1f5f9', paddingBottom: '12px', marginBottom: '20px' }}>
-                                                <h3 style={{ margin: 0, color: 'var(--amber-dark)', fontSize: '18px', fontWeight: 'bold' }}>{train.train_name.toUpperCase()} ({train.train_number})</h3>
+                                        <div key={train.train_id} className="card" style={{ padding: '25px', marginBottom: '25px', border: '1px solid #e2e8f0' }}>
+                                            {/* Train Header Title */}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                                                <div>
+                                                    <h3 style={{ margin: 0, color: 'var(--amber-dark)', fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.3px' }}>
+                                                        {train.train_name.toUpperCase()} ({train.train_number})
+                                                    </h3>
+                                                    <div style={{ fontSize: '12px', color: 'var(--rail-green)', fontWeight: '600', marginTop: '4px' }}>
+                                                        👥 0+ users are trying to book ticket(s)
+                                                    </div>
+                                                </div>
                                             </div>
 
-                                            <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                                            {/* Timeline Route Card (Departure Time, Journey Duration, Arrival Time) */}
+                                            <div style={{
+                                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                                backgroundColor: '#f8fafc', padding: '16px 24px', borderRadius: '8px',
+                                                border: '1px solid #e2e8f0', marginBottom: '20px'
+                                            }}>
+                                                {/* Left Departure Info */}
+                                                <div>
+                                                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b' }}>
+                                                        {formatDateShort(journeyDate)}, {formatTimeAMPM(train.start_time)}
+                                                    </div>
+                                                    <div style={{ fontSize: '13px', color: '#64748b', marginTop: '2px', fontWeight: '500' }}>
+                                                        {fromStationName}
+                                                    </div>
+                                                </div>
+
+                                                {/* Center Duration Bar */}
+                                                <div style={{ flex: 1, maxWidth: '240px', margin: '0 30px', textAlign: 'center', position: 'relative' }}>
+                                                    <div style={{ height: '2px', backgroundColor: '#cbd5e1', width: '100%', position: 'absolute', top: '50%', transform: 'translateY(-50%)' }} />
+                                                    <span style={{
+                                                        position: 'relative', zIndex: 1, backgroundColor: '#fff', border: '1px solid #cbd5e1',
+                                                        padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold', color: '#475569'
+                                                    }}>
+                                                        {calculateDuration(train.start_time, train.end_time)}
+                                                    </span>
+                                                </div>
+
+                                                {/* Right Arrival Info */}
+                                                <div>
+                                                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b' }}>
+                                                        {formatDateShort(journeyDate)}, {formatTimeAMPM(train.end_time)}
+                                                    </div>
+                                                    <div style={{ fontSize: '13px', color: '#64748b', marginTop: '2px', fontWeight: '500' }}>
+                                                        {toStationName}
+                                                    </div>
+                                                </div>
+
+                                                {/* Action Link */}
+                                                <div style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                                    <span style={{ fontSize: '20px' }}>🪧</span>
+                                                    <span style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--rail-green)', marginTop: '2px' }}>Train Details</span>
+                                                </div>
+                                            </div>
+
+                                            {/* Seat Class Selection Cards Grid */}
+                                            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '20px' }}>
                                                 {Object.keys(trainClasses).map(cls => {
                                                     const isSelectedClass = expandedTrainId === train.train_id && seatClass === cls;
+                                                    const classFare = (train.fares && train.fares[cls]) ? train.fares[cls] : 'N/A';
+                                                    const classAvail = train.classAvailability ? train.classAvailability[cls] : null;
+
                                                     return (
                                                         <div key={cls} onClick={() => {
                                                             setExpandedTrainId(train.train_id);
@@ -1602,19 +1652,34 @@ export function App() {
                                                             fetchCoachSummary(train.train_id, journeyDate);
                                                         }} style={{
                                                             border: isSelectedClass ? '2px solid var(--rail-green)' : '1px solid #cbd5e1',
-                                                            borderRadius: '6px', padding: '15px', width: '160px',
-                                                            backgroundColor: isSelectedClass ? 'var(--rail-green-light)' : '#fdfdfd',
-                                                            cursor: 'pointer', display: 'flex', flexDirection: 'column'
+                                                            borderRadius: '8px', padding: '16px', width: '170px',
+                                                            backgroundColor: isSelectedClass ? '#e4f3ec' : '#f8fafc',
+                                                            cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                                                            boxShadow: isSelectedClass ? '0 4px 12px rgba(11,110,79,0.15)' : 'none',
+                                                            transition: 'all 0.15s ease'
                                                         }}>
-                                                            <div style={{ fontWeight: 'bold', color: '#4a5568', fontSize: '14px' }}>{cls}</div>
-                                                            <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--rail-green)', margin: '6px 0' }}>
-                                                                ৳ {(train.fares && train.fares[cls]) ? train.fares[cls] : 'N/A'}
+                                                            <div style={{ fontWeight: 'bold', color: '#1e293b', fontSize: '16px' }}>{cls}</div>
+                                                            <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--rail-green)', marginTop: '4px' }}>
+                                                                ৳{classFare}
                                                             </div>
+                                                            <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '12px' }}>Including VAT</div>
+
+                                                            <div style={{ fontSize: '11px', color: '#475569', marginBottom: '4px' }}>
+                                                                Available Tickets<br /><span style={{ fontSize: '10px', color: '#94a3b8' }}>(Counter + Online)</span>
+                                                            </div>
+
+                                                            <div style={{
+                                                                fontSize: '18px', fontWeight: 'bold',
+                                                                color: classAvail === 0 ? 'var(--red)' : 'var(--rail-green)',
+                                                                marginBottom: '14px'
+                                                            }}>
+                                                                {classAvail !== null ? classAvail : 'Available'}
+                                                            </div>
+
                                                             <button className={isSelectedClass ? 'btn btn-primary' : ''} style={{
-                                                                marginTop: 'auto', padding: '8px',
-                                                                background: isSelectedClass ? undefined : '#e2e8f0',
-                                                                color: isSelectedClass ? undefined : '#4a5568',
-                                                                border: 'none', borderRadius: '4px', fontWeight: 'bold', fontSize: '12px'
+                                                                marginTop: 'auto', padding: '10px', width: '100%',
+                                                                background: isSelectedClass ? 'var(--rail-green)' : 'var(--rail-green)',
+                                                                color: '#fff', border: 'none', borderRadius: '20px', fontWeight: 'bold', fontSize: '12px'
                                                             }}>
                                                                 {isSelectedClass ? 'SELECTED' : 'BOOK NOW'}
                                                             </button>
@@ -1623,6 +1688,7 @@ export function App() {
                                                 })}
                                             </div>
 
+                                            {/* Seat Map View when a Class is Selected */}
                                             {expandedTrainId === train.train_id && seatClass && (
                                                 <div style={{ borderTop: '2px dashed #cbd5e1', paddingTop: '20px', display: 'flex', gap: '40px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
 

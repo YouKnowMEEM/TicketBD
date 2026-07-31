@@ -52,8 +52,8 @@ async function cleanupExpiredLocks(connection) {
 async function validateActiveSeatLimit(connection, userId, trainId, startStationId, endStationId, journeyDate, requestedSeatCount) {
     const [newJourneyTimes] = await connection.query(`
         SELECT s1.departure_time, s2.arrival_time
-        FROM Stoppage s1 
-        JOIN Stoppage s2 ON s1.train_id = s2.train_id
+        FROM Stoppage s1
+                 JOIN Stoppage s2 ON s1.train_id = s2.train_id
         WHERE s1.train_id = ? AND s1.station_id = ? AND s2.station_id = ?
     `, [trainId, startStationId, endStationId]);
 
@@ -81,21 +81,20 @@ async function validateActiveSeatLimit(connection, userId, trainId, startStation
         newArrDateTime.setDate(newArrDateTime.getDate() + 1);
     }
 
-    // Active bookings: CONFIRMED active tickets or PENDING locks under 4 minutes
     const [activeBookings] = await connection.query(`
-        SELECT 
+        SELECT
             b.booking_id, b.journey_date, b.train_id,
             t.status AS ticket_status,
             s1.departure_time, s2.arrival_time
         FROM Booking b
-        LEFT JOIN Ticket t ON b.booking_id = t.booking_id
-        JOIN Stoppage s1 ON b.train_id = s1.train_id AND b.start_station_id = s1.station_id
-        JOIN Stoppage s2 ON b.train_id = s2.train_id AND b.end_station_id = s2.station_id
+                 LEFT JOIN Ticket t ON b.booking_id = t.booking_id
+                 JOIN Stoppage s1 ON b.train_id = s1.train_id AND b.start_station_id = s1.station_id
+                 JOIN Stoppage s2 ON b.train_id = s2.train_id AND b.end_station_id = s2.station_id
         WHERE b.user_id = ?
           AND (
             (b.status = 'CONFIRMED' AND (t.status IS NULL OR t.status = 'ACTIVE'))
-            OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))
-          )
+                OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))
+            )
     `, [userId]);
 
     let overlappingActiveCount = 0;
@@ -147,7 +146,6 @@ app.post('/api/signup', async (req, res) => {
     const studentEmail = `u${studentId}@student.cuet.ac.bd`;
 
     try {
-        // Check if user ALREADY exists in User table
         const [existingUsers] = await pool.query(
             'SELECT user_id FROM User WHERE username = ? OR email = ?',
             [studentId, studentEmail]
@@ -158,14 +156,13 @@ app.post('/api/signup', async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Zero Schema Change: Sign a JWT containing signup details, valid for 15 minutes
         const verificationToken = jwt.sign(
             { studentId, email: studentEmail, mobile, passwordHash: hashedPassword, type: 'REGISTRATION_VERIFY' },
             process.env.JWT_SECRET,
             { expiresIn: '15m' }
         );
 
-        console.log(`\n⏳ Generated 15-minute verification token for Student ID: ${studentId} (No DB record created yet)`);
+        console.log(`\n⏳ Generated 15-minute verification token for Student ID: ${studentId}`);
 
         const verificationLink = `https://ticketbd.onrender.com/?verify=${verificationToken}`;
         console.log(`=======================================================`);
@@ -221,7 +218,7 @@ app.post('/api/signup', async (req, res) => {
 });
 
 // ==========================================
-// 🔗 API ROUTE: VERIFY EMAIL & CREATE USER ACCOUNT IN TRANSACTION
+// 🔗 API ROUTE: VERIFY EMAIL & CREATE USER ACCOUNT
 // ==========================================
 app.post('/api/verify', async (req, res) => {
     const { token, studentId } = req.body;
@@ -253,7 +250,6 @@ app.post('/api/verify', async (req, res) => {
         try {
             await connection.beginTransaction();
 
-            // Insert user into User table ONLY NOW
             const insertQuery = `
                 INSERT INTO User (user_id, username, password, email, phone_number, is_verified, role)
                 VALUES (?, ?, ?, ?, ?, TRUE, 'passenger')
@@ -282,7 +278,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 // ==========================================
-// 🔐 API ROUTE: LOGIN (issues a JWT)
+// 🔐 API ROUTE: LOGIN
 // ==========================================
 app.post('/api/login', async (req, res) => {
     const { studentId, password } = req.body;
@@ -317,7 +313,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 // ==========================================
-// 👤 API ROUTE: GET USER PROFILE (auth required, self only)
+// 👤 API ROUTE: GET USER PROFILE
 // ==========================================
 app.get('/api/user/:userId', authenticateToken, authorizeSelfParam, async (req, res) => {
     try {
@@ -337,7 +333,7 @@ app.get('/api/user/:userId', authenticateToken, authorizeSelfParam, async (req, 
 });
 
 // ==========================================
-// 👤 API ROUTE: UPDATE USER PROFILE (auth required, self only)
+// 👤 API ROUTE: UPDATE USER PROFILE
 // ==========================================
 app.put('/api/user/:userId', authenticateToken, authorizeSelfParam, async (req, res) => {
     const { email, phone_number, password } = req.body;
@@ -376,16 +372,17 @@ app.get('/api/stations', async (req, res) => {
 });
 
 // ==========================================
-// 🚂 API ROUTE: FIND AVAILABLE TRAINS & FARES (public)
+// 🚂 API ROUTE: FIND AVAILABLE TRAINS (FILTER OUT PAST DEPARTURES FOR TODAY)
 // ==========================================
 app.get('/api/trains', async (req, res) => {
-    const { fromStation, toStation } = req.query;
+    const { fromStation, toStation, journeyDate } = req.query;
 
     if (!fromStation || !toStation) {
         return res.status(400).json({ error: "fromStation and toStation are required." });
     }
 
     try {
+        // Filter out trains that have ALREADY DEPARTED from start station if journeyDate is TODAY
         const trainQuery = `
             SELECT t.train_id, t.train_name, t.train_number, t.direction,
                    s1.departure_time AS start_time, s2.arrival_time AS end_time
@@ -394,9 +391,16 @@ app.get('/api/trains', async (req, res) => {
                      JOIN Stoppage s2 ON t.train_id = s2.train_id
             WHERE s1.station_id = ?
               AND s2.station_id = ?
-              AND s1.departure_time < s2.arrival_time;
+              AND s1.departure_time < s2.arrival_time
+              AND (
+                ? IS NULL OR ? > CURDATE()
+                    OR (? = CURDATE() AND s1.departure_time > CURTIME())
+                );
         `;
-        const [trains] = await pool.query(trainQuery, [fromStation, toStation]);
+        const [trains] = await pool.query(trainQuery, [
+            fromStation, toStation,
+            journeyDate || null, journeyDate || null, journeyDate || null
+        ]);
 
         for (const train of trains) {
             const [fares] = await pool.query(
@@ -406,6 +410,32 @@ app.get('/api/trains', async (req, res) => {
             const fareMap = {};
             fares.forEach(f => { fareMap[f.class] = f.price; });
             train.fares = fareMap;
+
+            // Fetch class-level seat availability counts
+            if (journeyDate) {
+                const [classCounts] = await pool.query(`
+                    SELECT 
+                        s.class,
+                        COUNT(s.seat_id) AS total,
+                        SUM(CASE 
+                            WHEN b.seat_id IS NOT NULL 
+                                 AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+                            THEN 1 ELSE 0 
+                        END) AS booked
+                    FROM Seat s
+                    LEFT JOIN Booking b ON s.seat_id = b.seat_id 
+                        AND b.journey_date = ? 
+                        AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+                    WHERE s.train_id = ?
+                    GROUP BY s.class
+                `, [journeyDate, train.train_id]);
+
+                const availMap = {};
+                classCounts.forEach(c => {
+                    availMap[c.class] = Math.max(0, Number(c.total) - Number(c.booked));
+                });
+                train.classAvailability = availMap;
+            }
         }
 
         res.json(trains);
@@ -430,18 +460,18 @@ app.get('/api/coach-summary', async (req, res) => {
         await cleanupExpiredLocks(connection);
 
         const query = `
-            SELECT 
+            SELECT
                 s.coach_name,
                 s.class,
                 COUNT(s.seat_id) AS total_seats,
-                SUM(CASE 
-                    WHEN b.seat_id IS NOT NULL 
-                         AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
-                    THEN 1 ELSE 0 
-                END) AS booked_seats
+                SUM(CASE
+                        WHEN b.seat_id IS NOT NULL
+                            AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+                            THEN 1 ELSE 0
+                    END) AS booked_seats
             FROM Seat s
-            LEFT JOIN Booking b ON s.seat_id = b.seat_id 
-                AND b.journey_date = ? 
+                     LEFT JOIN Booking b ON s.seat_id = b.seat_id
+                AND b.journey_date = ?
                 AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
             WHERE s.train_id = ?
             GROUP BY s.coach_name, s.class
@@ -481,22 +511,22 @@ app.get('/api/seats', async (req, res) => {
                 s.seat_number,
                 s.class,
                 s.price,
-                CASE 
-                    WHEN b.seat_id IS NOT NULL 
-                         AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
-                    THEN 1 ELSE 0 
-                END AS is_booked,
-                CASE 
-                    WHEN b.seat_id IS NOT NULL 
-                         AND b.status = 'PENDING' 
-                         AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)
-                    THEN 1 ELSE 0 
-                END AS is_pending
+                CASE
+                    WHEN b.seat_id IS NOT NULL
+                        AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+                        THEN 1 ELSE 0
+                    END AS is_booked,
+                CASE
+                    WHEN b.seat_id IS NOT NULL
+                        AND b.status = 'PENDING'
+                        AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)
+                        THEN 1 ELSE 0
+                    END AS is_pending
             FROM Seat s
-            LEFT JOIN Booking b
-                   ON s.seat_id = b.seat_id
-                       AND b.journey_date = ?
-                       AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+                     LEFT JOIN Booking b
+                               ON s.seat_id = b.seat_id
+                                   AND b.journey_date = ?
+                                   AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
             WHERE s.train_id = ?
               AND s.coach_name = ?
         `;
@@ -511,7 +541,7 @@ app.get('/api/seats', async (req, res) => {
 });
 
 // ==========================================
-// 🔒 API ROUTE: LOCK SEATS FOR 4 MINUTES (auth required, self only)
+// 🔒 API ROUTE: LOCK SEATS FOR 4 MINUTES
 // ==========================================
 app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), async (req, res) => {
     const { userId, trainId, startStationId, endStationId, journeyDate, selectedSeats } = req.body;
@@ -548,12 +578,12 @@ app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), asyn
             }
 
             const [alreadyBooked] = await connection.query(`
-                SELECT booking_id FROM Booking 
-                WHERE seat_id = ? AND journey_date = ? 
+                SELECT booking_id FROM Booking
+                WHERE seat_id = ? AND journey_date = ?
                   AND (
-                    status = 'CONFIRMED' 
-                    OR (status = 'PENDING' AND booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))
-                  )
+                    status = 'CONFIRMED'
+                        OR (status = 'PENDING' AND booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))
+                    )
             `, [requestedSeat.seat_id, journeyDate]);
 
             if (alreadyBooked.length > 0) {
@@ -587,7 +617,7 @@ app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), asyn
 });
 
 // ==========================================
-// 🎟️ API ROUTE: FINALIZE CHECKOUT (auth required, self only)
+// 🎟️ API ROUTE: FINALIZE CHECKOUT
 // ==========================================
 app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async (req, res) => {
     const { userId, bookingIds, paymentMethod } = req.body;
@@ -607,9 +637,9 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
             const [bookings] = await connection.query(`
                 SELECT b.booking_id, b.seat_id, b.journey_date, b.start_station_id, b.end_station_id, s.price, b.booking_time
                 FROM Booking b
-                JOIN Seat s ON b.seat_id = s.seat_id
+                         JOIN Seat s ON b.seat_id = s.seat_id
                 WHERE b.booking_id = ? AND b.user_id = ? AND b.status = 'PENDING'
-                FOR UPDATE
+                    FOR UPDATE
             `, [bookingId, userId]);
 
             if (bookings.length === 0) {
@@ -642,8 +672,8 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
             const [pendingRefund] = await connection.query(`
                 SELECT rr.refund_request_id, t.price_paid AS original_price
                 FROM RefundRequest rr
-                JOIN Ticket t ON rr.ticket_id = t.ticket_id
-                JOIN Booking b ON t.booking_id = b.booking_id
+                         JOIN Ticket t ON rr.ticket_id = t.ticket_id
+                         JOIN Booking b ON t.booking_id = b.booking_id
                 WHERE b.seat_id = ? AND b.journey_date = ? AND rr.status = 'PENDING_RESALE' LIMIT 1
             `, [booking.seat_id, booking.journey_date]);
 
@@ -678,7 +708,7 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
 });
 
 // ==========================================
-// 🎟️ API ROUTE: FETCH USER TICKETS - 15-DAY HISTORY (ORDERED NEWEST FIRST)
+// 🎟️ API ROUTE: FETCH USER TICKETS
 // ==========================================
 app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async (req, res) => {
     const { userId } = req.params;
@@ -689,16 +719,16 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
 
         const query = `
             SELECT
-                t.ticket_id, 
-                DATE_FORMAT(t.journey_date, '%Y-%m-%d') as journey_date, 
-                t.price_paid, 
+                t.ticket_id,
+                DATE_FORMAT(t.journey_date, '%Y-%m-%d') as journey_date,
+                t.price_paid,
                 t.status AS ticket_status,
-                tr.train_name, 
+                tr.train_name,
                 tr.train_number,
-                s.seat_number, 
+                s.seat_number,
                 s.coach_name,
                 s.class,
-                p.transaction_id, 
+                p.transaction_id,
                 p.payment_time AS payment_date,
                 b.booking_time,
                 (SELECT station_name FROM Station WHERE station_id = b.start_station_id) AS start_station,
@@ -729,7 +759,7 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
 });
 
 // ==========================================
-// 🚫 API ROUTE: PARTIAL / FULL TICKET CANCELLATION & ৳20 SERVICE FEE DEDUCTION
+// 🚫 API ROUTE: CANCELLATION & SERVICE FEE
 // ==========================================
 app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId'), async (req, res) => {
     const { ticketId, ticketIds, studentId } = req.body;
@@ -757,8 +787,8 @@ app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId')
             const [ticketInfo] = await connection.query(
                 `SELECT t.ticket_id, t.price_paid, t.journey_date, b.booking_id, b.train_id, b.start_station_id, s.seat_number, s.coach_name
                  FROM Ticket t
-                 JOIN Booking b ON t.booking_id = b.booking_id
-                 JOIN Seat s ON b.seat_id = s.seat_id
+                          JOIN Booking b ON t.booking_id = b.booking_id
+                          JOIN Seat s ON b.seat_id = s.seat_id
                  WHERE t.ticket_id = ? AND t.user_id = ? AND t.status = 'ACTIVE' FOR UPDATE`,
                 [tId, studentId]
             );
