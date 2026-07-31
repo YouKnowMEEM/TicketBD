@@ -172,20 +172,18 @@ export function App() {
 
     // --- EFFECT 2: FETCH STATIONS FROM BACKEND ON LOAD ---
     useEffect(() => {
-        const fetchStations = async () => {
-            try {
-                // IMPORTANT: If your backend runs on a different port (like 8080 or 3001), update this URL!
-                const response = await fetch('http://localhost:5000/api/stations');
-                if (!response.ok) throw new Error('Network response was not ok');
-
-                const data = await response.json();
-                setStationList(data);
-            } catch (error) {
-                console.error("Failed to fetch stations from database:", error);
-            }
-        };
-
-        fetchStations();
+        // We use API_BASE here instead of localhost!
+        fetch(`${API_BASE}/api/stations`)
+            .then(res => {
+                if (!res.ok) throw new Error('Network response was not ok');
+                return res.json();
+            })
+            .then(data => {
+                if (Array.isArray(data)) {
+                    setStationList(data);
+                }
+            })
+            .catch(err => console.error("🛑 Failed to load stations:", err));
     }, []);
 
     // --- EFFECT 3: RESTORE SESSION ON PAGE LOAD ---
