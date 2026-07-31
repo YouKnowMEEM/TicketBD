@@ -94,7 +94,7 @@ const formatToDisplayDate = (yyyy_mm_dd) => {
     const parts = yyyy_mm_dd.split('-');
     if (parts.length === 3) {
         const [y, m, d] = parts;
-        return `${d}/${m}/${y}`;
+        return `${d}-${m}-${y}`;
     }
     return yyyy_mm_dd;
 };
@@ -130,8 +130,8 @@ export function App() {
     // --- Search States ---
     const [fromStationName, setFromStationName] = useState('');
     const [toStationName, setToStationName] = useState('');
-    const [journeyDate, setJourneyDate] = useState(''); // Stores YYYY-MM-DD for DB queries
-    const [displayDate, setDisplayDate] = useState(''); // Stores DD/MM/YYYY for UI
+    const [journeyDate, setJourneyDate] = useState(''); // YYYY-MM-DD for DB
+    const [displayDate, setDisplayDate] = useState(''); // DD/MM/YYYY for UI
     const [seatClass, setSeatClass] = useState('Snigdha');
     const [trains, setTrains] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
@@ -141,7 +141,7 @@ export function App() {
     const [selectedSeats, setSelectedSeats] = useState([]);
     const [selectedCoach, setSelectedCoach] = useState('');
     const [coachSeats, setCoachSeats] = useState([]);
-    const [coachSummary, setCoachSummary] = useState({}); // Dynamic seat counts: coachName -> { available, total, booked }
+    const [coachSummary, setCoachSummary] = useState({});
     const [seatsLoading, setSeatsLoading] = useState(false);
 
     // --- Payment & 4-Minute Lock Modal ---
@@ -162,7 +162,7 @@ export function App() {
     // --- Partial Cancellation Modal States ---
     const [showCancelModal, setShowCancelModal] = useState(false);
     const [selectedCancelTicketIds, setSelectedCancelTicketIds] = useState([]);
-    const [cancelModalData, setCancelModalData] = useState(null); // { seats: [...], totalFare, serviceFee, estimatedRefund }
+    const [cancelModalData, setCancelModalData] = useState(null);
     const [cancelLoading, setCancelLoading] = useState(false);
 
     // --- Verify Ticket / Contact modals ---
@@ -191,20 +191,26 @@ export function App() {
     };
     const { minDate, maxDate } = getMinMaxDates();
 
-    // --- EFFECT 1: VERIFICATION TRAP (email verify link) ---
+    // --- EFFECT 1: VERIFICATION LINK TRAP ---
     useEffect(() => {
         const searchParams = new URLSearchParams(window.location.search);
-        const verifyId = searchParams.get('verify');
+        const verifyToken = searchParams.get('verify');
 
-        if (verifyId) {
+        if (verifyToken) {
             setView('verify_screen');
             fetch(`${API_BASE}/api/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ studentId: verifyId })
+                body: JSON.stringify({ token: verifyToken, studentId: verifyToken })
             })
                 .then(res => res.json())
-                .then(data => setAuthMessage(data.message))
+                .then(data => {
+                    if (data.success) {
+                        setAuthMessage("✅ Account successfully verified & created! You can now log in.");
+                    } else {
+                        setAuthMessage(data.message || "Verification failed. Link may have expired.");
+                    }
+                })
                 .catch(() => setAuthMessage("Verification failed. Server error."));
         }
     }, []);
@@ -257,7 +263,7 @@ export function App() {
         return fetch(url, { ...options, headers });
     };
 
-    // --- HELPER: resolve a station name to its id, strictly from the DB list ---
+    // --- HELPER: resolve station name to id ---
     const getStationIdByName = (name) => {
         if (!name) return null;
         const match = stationList.find(s => s.name.toLowerCase() === name.trim().toLowerCase());
@@ -288,142 +294,232 @@ export function App() {
         setView('home');
     };
 
-    // --- PDF GENERATION ---
+    // =========================================================================
+    // 🚂 REDESIGNED OFFICIAL BANGLADESH RAILWAY E-TICKET PDF GENERATOR
+    // =========================================================================
     const generatePDF = (ticket) => {
-        const doc = new jsPDF();
+        const doc = new jsPDF('p', 'mm', 'a4');
 
-        // Colors
-        const primaryGreen = [11, 110, 79];
-        const darkGray = [60, 60, 60];
-        const lightGray = [150, 150, 150];
-        const borderColor = [200, 200, 200];
+        const primaryGreen = [11, 110, 79];     // #0b6e4f
+        const textDark = [30, 40, 35];          // #1e2823
+        const lightBg = [248, 250, 252];        // #f8fafc
+        const lineGray = [215, 222, 218];       // #d7dee0
 
-        // Header Banner
+        // 1. Outer Frame Border
+        doc.setDrawColor(...primaryGreen);
+        doc.setLineWidth(1.2);
+        doc.rect(10, 10, 190, 277);
+
+        // 2. Top Header - Logo Emblem & Title
+        // Circular emblem placeholder graphic
         doc.setFillColor(...primaryGreen);
-        doc.rect(0, 0, 210, 25, 'F');
+        doc.circle(22, 22, 7, 'F');
+        doc.setFillColor(230, 164, 25); // Gold inner circle
+        doc.circle(22, 22, 3.5, 'F');
 
+        // Main Title Header
+        doc.setTextColor(...primaryGreen);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(16);
+        doc.text('BANGLADESH RAILWAY', 105, 20, { align: 'center' });
+
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.text('E-TICKET / BOARDING PASS', 105, 26, { align: 'center' });
+
+        // Right side Partner branding & QR Code box
+        doc.setFontSize(7);
+        doc.setTextColor(100, 100, 100);
+        doc.setFont("helvetica", "normal");
+        doc.text('Powered by', 185, 17, { align: 'right' });
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(0, 0, 0);
+        doc.text('Shohoz Synesis Vincen JV', 185, 21, { align: 'right' });
+
+        // QR Code Box graphic
+        doc.setDrawColor(50, 50, 50);
+        doc.setFillColor(255, 255, 255);
+        doc.setLineWidth(0.5);
+        doc.rect(165, 24, 22, 22, 'FD');
+        doc.setFontSize(6);
+        doc.setTextColor(80, 80, 80);
+        doc.text('SCAN QR', 176, 35, { align: 'center' });
+        doc.setFontSize(5);
+        doc.text(ticket.transaction_id || 'VERIFY', 176, 38, { align: 'center' });
+
+        // 3. Passenger Greeting Notice
+        doc.setFontSize(9);
+        doc.setTextColor(...textDark);
+        doc.setFont("helvetica", "bold");
+        doc.text(`Dear CUET Student (${studentId}),`, 15, 36);
+
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        const textMsg = "Your request to book e-ticket for your journey in Bangladesh Railway was successful. You can travel on the train mentioned in the ticket subject to showing your NID or Photo ID card. The details of your e-ticket are as below:";
+        doc.text(doc.splitTextToSize(textMsg, 145), 15, 41);
+
+        let curY = 52;
+
+        // 4. Section 1: Journey Information (যাত্রার তথ্য)
+        doc.setFillColor(...primaryGreen);
+        doc.rect(15, curY, 180, 7, 'F');
         doc.setTextColor(255, 255, 255);
         doc.setFont("helvetica", "bold");
-        doc.setFontSize(18);
-        doc.text('BANGLADESH RAILWAY', 105, 12, { align: 'center' });
+        doc.setFontSize(9.5);
+        doc.text('Journey Information (Journey Details)', 18, curY + 5);
 
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(10);
-        doc.text('E-TICKET / BOARDING PASS', 105, 18, { align: 'center' });
-
-        // PNR & Barcode
-        doc.setTextColor(0, 0, 0);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
-        doc.text('PNR NUMBER:', 20, 38);
-
-        doc.setTextColor(...primaryGreen);
-        doc.setFontSize(14);
-        doc.text(ticket.transaction_id || 'N/A', 50, 38);
-
-        doc.setTextColor(...lightGray);
-        doc.setFontSize(8);
-        doc.setFont("helvetica", "normal");
-        doc.text(`Issued: ${new Date(ticket.payment_date).toLocaleString()}`, 190, 38, { align: 'right' });
-
-        // Journey Box
-        doc.setDrawColor(...borderColor);
-        doc.setFillColor(252, 252, 252);
-        doc.roundedRect(20, 45, 170, 40, 3, 3, 'FD');
-
-        doc.setFontSize(8);
-        doc.setTextColor(...lightGray);
-        doc.text('FROM', 25, 52);
-        doc.text('TO', 105, 52);
-        doc.text('TRAIN', 25, 70);
-        doc.text('JOURNEY DATE', 105, 70);
-
-        doc.setFontSize(12);
-        doc.setTextColor(...darkGray);
-        doc.setFont("helvetica", "bold");
-        doc.text(ticket.start_station, 25, 58);
-        doc.text(ticket.end_station, 105, 58);
-
-        doc.setFontSize(11);
-        doc.text(`${ticket.train_name} [${ticket.train_number}]`, 25, 76);
-        doc.text(formatToDisplayDate(ticket.journey_date), 105, 76);
-
-        // Passenger Box
-        doc.roundedRect(20, 90, 170, 25, 3, 3, 'FD');
-
-        doc.setFontSize(8);
-        doc.setTextColor(...lightGray);
-        doc.setFont("helvetica", "normal");
-        doc.text('PASSENGER', 25, 97);
-        doc.text('COACH', 105, 97);
-        doc.text('SEAT / BERTH', 145, 97);
-
-        doc.setFontSize(11);
-        doc.setTextColor(...darkGray);
-        doc.setFont("helvetica", "bold");
-        doc.text(`CUET Student (ID: ${studentId})`, 25, 104);
-        doc.text(ticket.coach_name || 'N/A', 105, 104);
-        doc.setTextColor(...primaryGreen);
-        doc.text(ticket.seat_number || 'N/A', 145, 104);
-
-        // Payment Breakdown
-        doc.setTextColor(...darkGray);
-        doc.setFontSize(11);
-        doc.text('FARE DETAILS', 20, 130);
-        doc.line(20, 133, 190, 133);
+        curY += 7;
 
         const baseFare = parseFloat(ticket.price_paid || 0);
         const vat = baseFare * 0.15;
         const serviceCharge = 20.00;
-        const total = baseFare + vat + serviceCharge;
+        const totalFare = baseFare + vat + serviceCharge;
 
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "normal");
-        doc.text('Base Ticket Fare:', 20, 142);
-        doc.text(`Tk. ${baseFare.toFixed(2)}`, 190, 142, { align: 'right' });
-
-        doc.text('VAT (15%):', 20, 148);
-        doc.text(`Tk. ${vat.toFixed(2)}`, 190, 148, { align: 'right' });
-
-        doc.text('Service Charge:', 20, 154);
-        doc.text(`Tk. ${serviceCharge.toFixed(2)}`, 190, 154, { align: 'right' });
-
-        doc.setDrawColor(...lightGray);
-        doc.line(130, 160, 190, 160);
-
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
-        doc.setTextColor(0, 0, 0);
-        doc.text('Total Amount Paid:', 130, 166);
-        doc.setTextColor(...primaryGreen);
-        doc.text(`Tk. ${total.toFixed(2)}`, 190, 166, { align: 'right' });
-
-        // Instructions
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(9);
-        doc.setTextColor(...darkGray);
-        doc.text('Important Information:', 20, 190);
-
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(8);
-        doc.setTextColor(...lightGray);
-        const instructions = [
-            '• Carrying NID or Photo ID (Student ID) while travelling is mandatory.',
-            '• You can carry either a soft copy or printed copy of your e-ticket.',
-            '• No need to print e-ticket from the counter.'
+        const journeyTableData = [
+            ['Issue Date & Time:', new Date(ticket.payment_date || Date.now()).toLocaleString()],
+            ['Journey Date & Time:', `${formatToDisplayDate(ticket.journey_date)}`],
+            ['Train Name & Number:', `${ticket.train_name} [${ticket.train_number}]`],
+            ['From Station:', ticket.start_station],
+            ['To Station:', ticket.end_station],
+            ['Class Name:', ticket.class || 'SNIGDHA'],
+            ['Coach Name / Seat(s):', `${ticket.coach_name}-${ticket.seat_number}`],
+            ['No. of Seats:', '1'],
+            ['No. of Adult Passenger(s):', '1'],
+            ['No. of Senior Citizen Passenger(s):', '0'],
+            ['No. of Child Passenger(s):', '0'],
+            ['Fare:', `BDT ${baseFare.toFixed(2)}`],
+            ['VAT:', `BDT ${vat.toFixed(2)}`],
+            ['Service Charge:', `BDT ${serviceCharge.toFixed(2)}`],
+            ['Total Fare:**', `BDT ${totalFare.toFixed(2)}`]
         ];
 
-        instructions.forEach((inst, index) => {
-            doc.text(inst, 20, 196 + (index * 5));
+        doc.setLineWidth(0.2);
+        doc.setDrawColor(...lineGray);
+
+        journeyTableData.forEach(([label, val], idx) => {
+            const isTotalRow = label.startsWith('Total Fare');
+            const rowHeight = 6;
+
+            if (idx % 2 === 0) {
+                doc.setFillColor(...lightBg);
+                doc.rect(15, curY, 180, rowHeight, 'F');
+            }
+            doc.rect(15, curY, 180, rowHeight, 'S');
+            doc.line(110, curY, 110, curY + rowHeight);
+
+            doc.setFontSize(8);
+            if (isTotalRow) {
+                doc.setFont("helvetica", "bold");
+                doc.setTextColor(...primaryGreen);
+            } else {
+                doc.setFont("helvetica", "normal");
+                doc.setTextColor(...textDark);
+            }
+
+            doc.text(label, 18, curY + 4.2);
+            doc.setFont("helvetica", "bold");
+            doc.text(val, 113, curY + 4.2);
+
+            curY += rowHeight;
         });
 
-        doc.setTextColor(...primaryGreen);
-        doc.setFont("helvetica", "bold");
-        doc.text('Wishing you a pleasant and safe journey', 105, 275, { align: 'center' });
+        // Footnote
+        doc.setFontSize(7);
         doc.setFont("helvetica", "normal");
-        doc.text('Bangladesh Railway', 105, 280, { align: 'center' });
+        doc.setTextColor(120, 120, 120);
+        doc.text('** Total Fare includes BDT 50 Bedding Charges per seat for AC_B and F_BERTH seat classes.', 15, curY + 4);
 
-        doc.save(`TicketBD_${ticket.transaction_id}.pdf`);
+        curY += 9;
+
+        // 5. Section 2: Passenger Information (যাত্রীর তথ্য)
+        doc.setFillColor(...primaryGreen);
+        doc.rect(15, curY, 180, 7, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.text('Passenger Information (Passenger Details)', 18, curY + 5);
+
+        curY += 7;
+
+        const passengerTableData = [
+            ['Passenger Name:', `CUET Student (${studentId})`],
+            ['Identification Type:', 'Student ID / NID'],
+            ['Identification Number:', studentId],
+            ['Mobile Number:', ticket.user_phone || '019*****992'],
+            ['PNR Number:', ticket.transaction_id || 'N/A']
+        ];
+
+        passengerTableData.forEach(([label, val], idx) => {
+            const rowHeight = 6;
+            if (idx % 2 === 0) {
+                doc.setFillColor(...lightBg);
+                doc.rect(15, curY, 180, rowHeight, 'F');
+            }
+            doc.rect(15, curY, 180, rowHeight, 'S');
+            doc.line(110, curY, 110, curY + rowHeight);
+
+            doc.setFontSize(8);
+            doc.setFont("helvetica", "normal");
+            doc.setTextColor(...textDark);
+            doc.text(label, 18, curY + 4.2);
+
+            doc.setFont("helvetica", "bold");
+            if (label === 'PNR Number:') doc.setTextColor(...primaryGreen);
+            doc.text(val, 113, curY + 4.2);
+
+            curY += rowHeight;
+        });
+
+        curY += 8;
+
+        // 6. Section 3: Please Note / Important Instructions
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...textDark);
+        doc.text('Please Note :-', 15, curY);
+
+        curY += 4;
+        doc.setFontSize(7.5);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(90, 90, 90);
+
+        const notes = [
+            '• Carrying NID or Photo ID (Student ID) while travelling is mandatory for each passenger.',
+            '• You can carry either a soft copy or printed copy of your e-ticket while travelling.',
+            '• No need to print e-ticket from the counter.',
+            '• It is mandatory for children between 3 to 12 years old to purchase minor tickets.'
+        ];
+
+        notes.forEach(note => {
+            doc.text(note, 15, curY);
+            curY += 4;
+        });
+
+        curY += 3;
+
+        // 7. Railway Emergency & Police Helpline Banner
+        doc.setFillColor(254, 242, 242);
+        doc.setDrawColor(239, 68, 68);
+        doc.setLineWidth(0.6);
+        doc.roundedRect(15, curY, 180, 10, 2, 2, 'FD');
+
+        doc.setFontSize(8);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(185, 28, 28);
+        doc.text(
+            'Railway Service Helpline: 131  |  Railway Police Hotline: 01320177568',
+            105, curY + 6.2, { align: 'center' }
+        );
+
+        curY += 16;
+
+        // 8. Footer Farewell
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...primaryGreen);
+        doc.text('Wishing you a pleasant and safe journey - Bangladesh Railway', 105, curY, { align: 'center' });
+
+        doc.save(`BangladeshRailway_Ticket_${ticket.transaction_id}.pdf`);
     };
 
     // --- AUTHENTICATION HANDLERS ---
@@ -526,7 +622,6 @@ export function App() {
         const activeTickets = ticketList.filter(t => t.ticket_status === 'ACTIVE');
         if (activeTickets.length === 0) return;
 
-        // Default: select all active tickets in this group
         const initialSelectedIds = activeTickets.map(t => t.ticket_id);
         setSelectedCancelTicketIds(initialSelectedIds);
 
@@ -658,7 +753,7 @@ export function App() {
         }
     };
 
-    // --- SEAT SELECTION HANDLER (WITH MAX 4 SEATS PER TRANSACTION CHECK) ---
+    // --- SEAT SELECTION HANDLER ---
     const handleSeatSelect = (seatId, seatName, isBooked) => {
         if (isBooked) return;
         setSelectedSeats((prevSelected) => {
@@ -703,10 +798,9 @@ export function App() {
 
             if (data.success) {
                 setLockedBookingIds(data.bookingIds);
-                setLockSecondsLeft(240); // Reset timer to 4 minutes
+                setLockSecondsLeft(240);
                 setShowPaymentModal(true);
             } else {
-                // Display exact error message for active seat limit violation
                 alert(data.message);
             }
         } catch (error) {
@@ -795,7 +889,6 @@ export function App() {
         return journeyDateObj >= today;
     };
 
-    // --- Refund status -> badge/label helpers ---
     const refundBadge = (ticket) => {
         if (ticket.ticket_status !== 'CANCELLED') return null;
         switch (ticket.refund_status) {
@@ -808,14 +901,12 @@ export function App() {
         }
     };
 
-    // Format seconds left to MM:SS
     const formatTimeLeft = (sec) => {
         const m = Math.floor(sec / 60);
         const s = sec % 60;
         return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     };
 
-    // Group ticket history by transaction ID (PNR)
     const groupedTickets = myTickets.reduce((groups, ticket) => {
         const key = ticket.transaction_id || `SINGLE-${ticket.ticket_id}`;
         if (!groups[key]) groups[key] = [];
@@ -1025,7 +1116,6 @@ export function App() {
                             })}
                         </div>
 
-                        {/* Refund Formula Breakdown (Requirement 8) */}
                         <div style={{ backgroundColor: '#f8fafc', padding: '14px', borderRadius: '6px', border: '1px solid var(--line)', marginBottom: '20px', fontSize: '13px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                                 <span>Selected Seat Fare:</span>
@@ -1059,21 +1149,24 @@ export function App() {
             )}
 
             <div style={{ paddingBottom: '50px', flex: 1 }}>
-                {/* ================= VERIFICATION SCREEN (email link) ================= */}
+                {/* ================= VERIFICATION SCREEN ================= */}
                 {view === 'verify_screen' && (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 'calc(100vh - 80px)' }}>
-                        <div className="card" style={{ padding: '40px', textAlign: 'center' }}>
-                            <h2 style={{ color: 'var(--rail-green)' }}>Email Verification</h2>
-                            <p style={{ fontWeight: 'bold', margin: '20px 0' }}>{authMessage || 'Verifying your account...'}</p>
+                        <div className="card" style={{ padding: '40px', textAlign: 'center', maxWidth: '440px' }}>
+                            <div style={{ fontSize: '40px', marginBottom: '10px' }}>📧</div>
+                            <h2 style={{ color: 'var(--rail-green)', margin: '0 0 10px 0' }}>Email Verification</h2>
+                            <p style={{ fontWeight: 'bold', margin: '15px 0', fontSize: '14px', lineHeight: '1.5' }}>
+                                {authMessage || 'Verifying your email and creating your account...'}
+                            </p>
                             <button
                                 className="btn btn-primary"
-                                style={{ padding: '10px 20px' }}
+                                style={{ padding: '12px 24px', marginTop: '10px' }}
                                 onClick={() => {
                                     window.history.replaceState(null, '', window.location.pathname);
                                     setView('auth');
                                     setAuthMode('login');
                                 }}>
-                                GO TO LOGIN
+                                PROCEED TO LOGIN
                             </button>
                         </div>
                     </div>
@@ -1175,7 +1268,7 @@ export function App() {
                     </div>
                 )}
 
-                {/* ================= PROFILE / MY TICKETS PAGE (NEWEST FIRST) ================= */}
+                {/* ================= PROFILE / MY TICKETS PAGE ================= */}
                 {view === 'profile' && (
                     <div style={{ maxWidth: '900px', margin: '40px auto', padding: '0 20px' }}>
                         <div style={{ display: 'flex', gap: '20px', borderBottom: '2px solid var(--line)', marginBottom: '25px' }}>
@@ -1383,7 +1476,6 @@ export function App() {
                                             Date of Journey (DD/MM/YYYY)
                                         </label>
                                         <div className="date-input-wrapper">
-                                            {/* Text input for manual typing in DD/MM/YYYY format */}
                                             <input
                                                 type="text"
                                                 ref={dateInputRef}
@@ -1396,7 +1488,6 @@ export function App() {
                                                     if (val.length > 5) val = val.slice(0, 5) + '/' + val.slice(5, 9);
                                                     setDisplayDate(val);
 
-                                                    // Update DB date state when full DD/MM/YYYY is typed
                                                     if (val.length === 10) {
                                                         const [d, m, y] = val.split('/');
                                                         const dbDate = `${y}-${m}-${d}`;
@@ -1410,7 +1501,6 @@ export function App() {
                                                 className="input-field date-text-field"
                                             />
 
-                                            {/* Native Calendar Picker Overlay over Icon */}
                                             <div
                                                 className="calendar-icon-btn"
                                                 title="Open Calendar"
@@ -1430,7 +1520,7 @@ export function App() {
                                                     max={maxDate}
                                                     value={journeyDate}
                                                     onChange={(e) => {
-                                                        const selectedDbDate = e.target.value; // YYYY-MM-DD
+                                                        const selectedDbDate = e.target.value;
                                                         setJourneyDate(selectedDbDate);
                                                         if (selectedDbDate) {
                                                             setDisplayDate(formatToDisplayDate(selectedDbDate));
@@ -1541,7 +1631,6 @@ export function App() {
 
                                                     <div style={{ backgroundColor: '#f8fafc', padding: '25px', borderRadius: '12px', border: '1px solid #e2e8f0', width: 'fit-content' }}>
 
-                                                        {/* Real-time Dynamic Compartment Seat Count (Requirement 3) */}
                                                         <div style={{ marginBottom: '20px' }}>
                                                             <label style={{ fontSize: '14px', fontWeight: 'bold', color: '#2c3e50', display: 'block', marginBottom: '8px' }}>Select Coach</label>
                                                             <select
@@ -1626,7 +1715,6 @@ export function App() {
                                                             </div>
                                                         )}
 
-                                                        {/* Bangladeshi Taka Symbol ৳ */}
                                                         <div style={{
                                                             backgroundColor: 'var(--rail-green-light)', padding: '15px', borderRadius: '4px', textAlign: 'center',
                                                             fontWeight: 'bold', fontSize: '18px', color: 'var(--rail-green)', border: '1px solid var(--line)', marginBottom: '20px'
@@ -1634,7 +1722,6 @@ export function App() {
                                                             Total: ৳ {selectedSeats.length > 0 ? (((train.fares && train.fares[seatClass]) ? train.fares[seatClass] : 0) * selectedSeats.length).toFixed(2) : '0.00'}
                                                         </div>
 
-                                                        {/* Step 1: Proceed to Payment & Lock Seats for 4 minutes */}
                                                         <button
                                                             onClick={() => handleProceedToPayment(train.train_id)}
                                                             disabled={selectedSeats.length === 0 || checkoutLoading}

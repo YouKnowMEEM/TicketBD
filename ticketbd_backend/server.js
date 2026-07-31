@@ -44,13 +44,12 @@ async function cleanupExpiredLocks(connection) {
     await connection.query(`
         DELETE FROM Booking
         WHERE status = 'PENDING'
-          AND (locked_until < NOW() OR (locked_until IS NULL AND booking_time < DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+          AND booking_time < DATE_SUB(NOW(), INTERVAL 4 MINUTE)
     `);
 }
 
 // Helper: Check active seat limit for user across overlapping journeys (Max 4 active seats)
 async function validateActiveSeatLimit(connection, userId, trainId, startStationId, endStationId, journeyDate, requestedSeatCount) {
-    // 1. Fetch departure & arrival times of the new requested journey
     const [newJourneyTimes] = await connection.query(`
         SELECT s1.departure_time, s2.arrival_time
         FROM Stoppage s1 
@@ -65,7 +64,6 @@ async function validateActiveSeatLimit(connection, userId, trainId, startStation
     const newDepTimeStr = newJourneyTimes[0].departure_time;
     const newArrTimeStr = newJourneyTimes[0].arrival_time;
 
-    // Convert journey date + time strings to JavaScript Date objects
     let journeyDateFormatted = journeyDate;
     if (journeyDate instanceof Date) {
         const y = journeyDate.getFullYear();
@@ -79,12 +77,11 @@ async function validateActiveSeatLimit(connection, userId, trainId, startStation
     const newDepDateTime = new Date(`${journeyDateFormatted}T${newDepTimeStr}`);
     let newArrDateTime = new Date(`${journeyDateFormatted}T${newArrTimeStr}`);
 
-    // Handle overnight journey crossing midnight
     if (newArrDateTime <= newDepDateTime) {
         newArrDateTime.setDate(newArrDateTime.getDate() + 1);
     }
 
-    // 2. Fetch all active bookings of the user whose arrival time is in the future
+    // Active bookings: CONFIRMED active tickets or PENDING locks under 4 minutes
     const [activeBookings] = await connection.query(`
         SELECT 
             b.booking_id, b.journey_date, b.train_id,
@@ -97,7 +94,7 @@ async function validateActiveSeatLimit(connection, userId, trainId, startStation
         WHERE b.user_id = ?
           AND (
             (b.status = 'CONFIRMED' AND (t.status IS NULL OR t.status = 'ACTIVE'))
-            OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))))
+            OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))
           )
     `, [userId]);
 
@@ -121,9 +118,7 @@ async function validateActiveSeatLimit(connection, userId, trainId, startStation
             bkArrDateTime.setDate(bkArrDateTime.getDate() + 1);
         }
 
-        // Only count active bookings whose journey has not ended yet
         if (bkArrDateTime > now) {
-            // Check for time overlap between existing booking and new journey
             const isOverlapping = (bkDepDateTime < newArrDateTime && bkArrDateTime > newDepDateTime);
             if (isOverlapping) {
                 overlappingActiveCount++;
@@ -137,7 +132,7 @@ async function validateActiveSeatLimit(connection, userId, trainId, startStation
 }
 
 // ==========================================
-// 🚀 API ROUTE: SIGNUP & SEND VERIFICATION EMAIL (BREVO HTTP API)
+// 🚀 API ROUTE: SIGNUP (ZERO SCHEMA CHANGE - JWT SIGNED TOKEN)
 // ==========================================
 app.post('/api/signup', async (req, res) => {
     const { studentId, mobile, password } = req.body;
@@ -152,16 +147,27 @@ app.post('/api/signup', async (req, res) => {
     const studentEmail = `u${studentId}@student.cuet.ac.bd`;
 
     try {
+        // Check if user ALREADY exists in User table
+        const [existingUsers] = await pool.query(
+            'SELECT user_id FROM User WHERE username = ? OR email = ?',
+            [studentId, studentEmail]
+        );
+        if (existingUsers.length > 0) {
+            return res.status(400).json({ message: "An account with this Student ID or Email already exists." });
+        }
+
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        const insertQuery = `
-            INSERT INTO User (user_id, username, password, email, phone_number, is_verified)
-            VALUES (?, ?, ?, ?, ?, FALSE)
-        `;
-        await pool.query(insertQuery, [studentId, studentId, hashedPassword, studentEmail, mobile]);
-        console.log(`\n✅ Saved user ${studentId} to DB!`);
+        // Zero Schema Change: Sign a JWT containing signup details, valid for 15 minutes
+        const verificationToken = jwt.sign(
+            { studentId, email: studentEmail, mobile, passwordHash: hashedPassword, type: 'REGISTRATION_VERIFY' },
+            process.env.JWT_SECRET,
+            { expiresIn: '15m' }
+        );
 
-        const verificationLink = `https://ticketbd.onrender.com/?verify=${studentId}`;
+        console.log(`\n⏳ Generated 15-minute verification token for Student ID: ${studentId} (No DB record created yet)`);
+
+        const verificationLink = `https://ticketbd.onrender.com/?verify=${verificationToken}`;
         console.log(`=======================================================`);
         console.log(`🔗 DEV MODE VERIFICATION LINK FOR TESTING:`);
         console.log(`👉 ${verificationLink}`);
@@ -183,11 +189,11 @@ app.post('/api/signup', async (req, res) => {
                     <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
                       <h2 style="color: #0b6e4f;">Welcome to TicketBD 🇧🇩</h2>
                       <p>Hello CUETian,</p>
-                      <p>You recently created an account with Student ID: <strong>${studentId}</strong>.</p>
-                      <p>Please click the button below to verify your student email address and activate your account:</p>
+                      <p>You recently initiated account creation for Student ID: <strong>${studentId}</strong>.</p>
+                      <p>Please click the button below within 15 minutes to verify your email and complete your account creation:</p>
                       <a href="${verificationLink}"
                          style="display: inline-block; padding: 12px 24px; background-color: #0b6e4f; color: #ffffff; text-decoration: none; border-radius: 4px; font-weight: bold; margin-top: 15px;">
-                        VERIFY MY ACCOUNT
+                        VERIFY & CREATE MY ACCOUNT
                       </a>
                     </div>
                   `
@@ -198,38 +204,77 @@ app.post('/api/signup', async (req, res) => {
 
             if (!response.ok) {
                 console.log("⚠️ Brevo email API returned an error:", data);
-                return res.status(200).json({ message: `Success! [DEV MODE] Check your server terminal for the verification link.` });
+                return res.status(200).json({ message: `Verification email sent! [DEV MODE] Check your server terminal for the verification link.` });
             }
 
-            console.log('✅ Email sent successfully via Brevo:', data);
-            res.status(200).json({ message: `Success! Verification email sent to ${studentEmail}.` });
+            console.log('✅ Verification email sent successfully via Brevo:', data);
+            res.status(200).json({ message: `Verification email sent to ${studentEmail}. Link expires in 15 minutes.` });
 
         } catch (emailError) {
             console.log("⚠️ Email network request failed:", emailError);
-            res.status(200).json({ message: `Success! [DEV MODE] Check your server terminal for the verification link.` });
+            res.status(200).json({ message: `Verification email sent! [DEV MODE] Check your server terminal for the verification link.` });
         }
     } catch (error) {
         console.error("Signup Error:", error);
-        if (error.code === 'ER_DUP_ENTRY') {
-            return res.status(400).json({ message: "An account with this Student ID or Email already exists." });
-        }
-        res.status(500).json({ message: "Database error during signup." });
+        res.status(500).json({ message: "Server error during signup." });
     }
 });
 
 // ==========================================
-// 🔗 API ROUTE: VERIFY EMAIL LINK
+// 🔗 API ROUTE: VERIFY EMAIL & CREATE USER ACCOUNT IN TRANSACTION
 // ==========================================
 app.post('/api/verify', async (req, res) => {
-    const { studentId } = req.body;
-    try {
-        const updateQuery = `UPDATE User SET is_verified = TRUE WHERE username = ?`;
-        const [result] = await pool.query(updateQuery, [studentId]);
+    const { token, studentId } = req.body;
+    const jwtToken = token || studentId;
 
-        if (result.affectedRows === 0) {
-            return res.status(400).json({ success: false, message: "User not found." });
+    if (!jwtToken) {
+        return res.status(400).json({ success: false, message: "Verification token is missing." });
+    }
+
+    try {
+        let decoded;
+        try {
+            decoded = jwt.verify(jwtToken, process.env.JWT_SECRET);
+        } catch (jwtErr) {
+            return res.status(400).json({
+                success: false,
+                message: "Verification link has expired or is invalid. Please sign up again."
+            });
         }
-        res.status(200).json({ success: true, message: "Account successfully verified! You can now log in." });
+
+        if (decoded.type !== 'REGISTRATION_VERIFY') {
+            return res.status(400).json({ success: false, message: "Invalid verification token." });
+        }
+
+        const { studentId: regStudentId, email: regEmail, mobile: regMobile, passwordHash } = decoded;
+
+        const connection = await pool.getConnection();
+
+        try {
+            await connection.beginTransaction();
+
+            // Insert user into User table ONLY NOW
+            const insertQuery = `
+                INSERT INTO User (user_id, username, password, email, phone_number, is_verified, role)
+                VALUES (?, ?, ?, ?, ?, TRUE, 'passenger')
+            `;
+            await connection.query(insertQuery, [regStudentId, regStudentId, passwordHash, regEmail, regMobile]);
+
+            await connection.commit();
+            console.log(`✅ Verified and created User account for Student ID: ${regStudentId}`);
+            res.status(200).json({
+                success: true,
+                message: "Account successfully created and verified! You can now log in."
+            });
+        } catch (dbErr) {
+            await connection.rollback();
+            if (dbErr.code === 'ER_DUP_ENTRY') {
+                return res.status(400).json({ success: false, message: "Account has already been verified and created. You can log in." });
+            }
+            res.status(500).json({ success: false, message: "Database error during account creation." });
+        } finally {
+            connection.release();
+        }
     } catch (error) {
         console.error("Verification Error:", error);
         res.status(500).json({ success: false, message: "Failed to verify account." });
@@ -251,10 +296,6 @@ app.post('/api/login', async (req, res) => {
         }
 
         const user = users[0];
-
-        if (!user.is_verified) {
-            return res.status(403).json({ success: false, message: "Please verify your email before logging in." });
-        }
 
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
@@ -395,13 +436,13 @@ app.get('/api/coach-summary', async (req, res) => {
                 COUNT(s.seat_id) AS total_seats,
                 SUM(CASE 
                     WHEN b.seat_id IS NOT NULL 
-                         AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))))
+                         AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
                     THEN 1 ELSE 0 
                 END) AS booked_seats
             FROM Seat s
             LEFT JOIN Booking b ON s.seat_id = b.seat_id 
                 AND b.journey_date = ? 
-                AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))))
+                AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
             WHERE s.train_id = ?
             GROUP BY s.coach_name, s.class
         `;
@@ -442,20 +483,20 @@ app.get('/api/seats', async (req, res) => {
                 s.price,
                 CASE 
                     WHEN b.seat_id IS NOT NULL 
-                         AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))))
+                         AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
                     THEN 1 ELSE 0 
                 END AS is_booked,
                 CASE 
                     WHEN b.seat_id IS NOT NULL 
                          AND b.status = 'PENDING' 
-                         AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+                         AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)
                     THEN 1 ELSE 0 
                 END AS is_pending
             FROM Seat s
             LEFT JOIN Booking b
                    ON s.seat_id = b.seat_id
                        AND b.journey_date = ?
-                       AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))))
+                       AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
             WHERE s.train_id = ?
               AND s.coach_name = ?
         `;
@@ -488,19 +529,15 @@ app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), asyn
     try {
         await connection.beginTransaction();
 
-        // 🧹 Clean up any expired locks before checking availability
         await cleanupExpiredLocks(connection);
 
-        // 🛑 VALIDATION: Maximum 4 active seats rule across overlapping journeys
         await validateActiveSeatLimit(
             connection, userId, trainId, startStationId, endStationId, journeyDate, selectedSeats.length
         );
 
-        // 🔒 LOCKING THE SEATS WITH DBMS TRANSACTION LOCKS
         const lockedBookingIds = [];
 
         for (const requestedSeat of selectedSeats) {
-            // FOR UPDATE row lock to avoid race conditions
             const [seatRows] = await connection.query(
                 `SELECT seat_id, price FROM Seat WHERE seat_id = ? FOR UPDATE`,
                 [requestedSeat.seat_id]
@@ -510,13 +547,12 @@ app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), asyn
                 throw new Error(`Seat ID ${requestedSeat.seat_id} does not exist.`);
             }
 
-            // Check if seat is currently booked or locked by another active booking
             const [alreadyBooked] = await connection.query(`
                 SELECT booking_id FROM Booking 
                 WHERE seat_id = ? AND journey_date = ? 
                   AND (
                     status = 'CONFIRMED' 
-                    OR (status = 'PENDING' AND (locked_until > NOW() OR (locked_until IS NULL AND booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))))
+                    OR (status = 'PENDING' AND booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))
                   )
             `, [requestedSeat.seat_id, journeyDate]);
 
@@ -524,10 +560,9 @@ app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), asyn
                 throw new Error(`Another passenger just reserved or locked seat ID ${requestedSeat.seat_id}. Please select a different seat.`);
             }
 
-            // Insert seat lock record as PENDING with 4-minute expiration
             const [bookingResult] = await connection.query(`
-                INSERT INTO Booking (user_id, train_id, start_station_id, end_station_id, seat_id, journey_date, status, locked_until)
-                VALUES (?, ?, ?, ?, ?, ?, 'PENDING', DATE_ADD(NOW(), INTERVAL 4 MINUTE))
+                INSERT INTO Booking (user_id, train_id, start_station_id, end_station_id, seat_id, journey_date, status)
+                VALUES (?, ?, ?, ?, ?, ?, 'PENDING')
             `, [userId, trainId, startStationId, endStationId, requestedSeat.seat_id, journeyDate]);
 
             lockedBookingIds.push(bookingResult.insertId);
@@ -569,9 +604,8 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
         const generatedTickets = [];
 
         for (const bookingId of bookingIds) {
-            // Verify the lock still exists, belongs to user, and has not expired
             const [bookings] = await connection.query(`
-                SELECT b.booking_id, b.seat_id, b.journey_date, b.start_station_id, b.end_station_id, s.price, b.locked_until, b.booking_time
+                SELECT b.booking_id, b.seat_id, b.journey_date, b.start_station_id, b.end_station_id, s.price, b.booking_time
                 FROM Booking b
                 JOIN Seat s ON b.seat_id = s.seat_id
                 WHERE b.booking_id = ? AND b.user_id = ? AND b.status = 'PENDING'
@@ -584,38 +618,27 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
 
             const booking = bookings[0];
 
-            // Double check lock expiration (4 minutes)
-            let expiryTime;
-            if (booking.locked_until) {
-                expiryTime = new Date(booking.locked_until).getTime();
-            } else {
-                expiryTime = new Date(booking.booking_time).getTime() + 4 * 60 * 1000;
-            }
-
+            const expiryTime = new Date(booking.booking_time).getTime() + 4 * 60 * 1000;
             if (expiryTime < Date.now()) {
                 throw new Error("Your 4-minute window to complete the payment has expired.");
             }
 
-            // Generate Ticket
             const [ticketResult] = await connection.query(`
                 INSERT INTO Ticket (booking_id, user_id, journey_date, price_paid, status)
                 VALUES (?, ?, ?, ?, 'ACTIVE')
             `, [booking.booking_id, userId, booking.journey_date, booking.price]);
             const newTicketId = ticketResult.insertId;
 
-            // Generate Payment record
             const transactionId = `TXN-${Date.now()}-${crypto.randomUUID().split('-')[0]}`;
             await connection.query(`
                 INSERT INTO Payment (transaction_id, ticket_id, amount, payment_method)
                 VALUES (?, ?, ?, ?)
             `, [transactionId, newTicketId, booking.price, paymentMethod || 'bKash']);
 
-            // Update Booking status to CONFIRMED
             await connection.query(`
-                UPDATE Booking SET status = 'CONFIRMED', locked_until = NULL WHERE booking_id = ?
+                UPDATE Booking SET status = 'CONFIRMED' WHERE booking_id = ?
             `, [booking.booking_id]);
 
-            // Check for pending resale refunds to settle
             const [pendingRefund] = await connection.query(`
                 SELECT rr.refund_request_id, t.price_paid AS original_price
                 FROM RefundRequest rr
@@ -664,7 +687,6 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
     try {
         await finalizeExpiredRefunds(connection, userId);
 
-        // Sort by payment_time / booking datetime DESC (Requirement 9)
         const query = `
             SELECT
                 t.ticket_id, 
@@ -681,6 +703,8 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
                 b.booking_time,
                 (SELECT station_name FROM Station WHERE station_id = b.start_station_id) AS start_station,
                 (SELECT station_name FROM Station WHERE station_id = b.end_station_id) AS end_station,
+                u.email AS user_email,
+                u.phone_number AS user_phone,
                 rr.status AS refund_status,
                 rr.potential_partial_refund,
                 rr.refunded_amount
@@ -689,6 +713,7 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
                      JOIN Train tr ON b.train_id = tr.train_id
                      JOIN Seat s ON b.seat_id = s.seat_id
                      JOIN Payment p ON t.ticket_id = p.ticket_id
+                     JOIN User u ON t.user_id = u.user_id
                      LEFT JOIN RefundRequest rr ON t.ticket_id = rr.ticket_id
             WHERE t.user_id = ? AND t.journey_date >= DATE_SUB(CURDATE(), INTERVAL 15 DAY)
             ORDER BY p.payment_time DESC, t.issue_time DESC, t.ticket_id DESC
@@ -707,7 +732,6 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
 // 🚫 API ROUTE: PARTIAL / FULL TICKET CANCELLATION & ৳20 SERVICE FEE DEDUCTION
 // ==========================================
 app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId'), async (req, res) => {
-    // Supports single ticketId or array of ticketIds for partial cancellation (Requirement 7)
     const { ticketId, ticketIds, studentId } = req.body;
 
     let targetTicketIds = [];
@@ -740,7 +764,7 @@ app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId')
             );
 
             if (ticketInfo.length === 0) {
-                continue; // Skip if already cancelled or invalid
+                continue;
             }
             const ticket = ticketInfo[0];
 
@@ -772,12 +796,10 @@ app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId')
                 throw new Error(`Cannot cancel seat ${ticket.coach_name}-${ticket.seat_number}. Cancellations are not allowed within 6 hours of departure.`);
             }
 
-            // Deduct ৳20 service fee per cancelled seat (Requirement 8)
             const serviceFee = 20.00;
             const seatFare = parseFloat(ticket.price_paid);
             const baseFareAfterServiceFee = Math.max(0, seatFare - serviceFee);
 
-            // Calculate time-based cancellation penalty
             let deductionRate = 0.10;
             if (hoursLeft <= 12) {
                 deductionRate = 0.75;
@@ -795,11 +817,9 @@ app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId')
             totalEstimatedRefund += potentialRefund;
             cancelledCount++;
 
-            // Cancel Ticket & Booking (immediately releases seat for re-booking)
             await connection.query(`UPDATE Ticket SET status = 'CANCELLED' WHERE ticket_id = ?`, [tId]);
             await connection.query(`UPDATE Booking SET status = 'CANCELLED' WHERE booking_id = ?`, [ticket.booking_id]);
 
-            // Store in RefundRequest with ৳20 fee recorded
             await connection.query(
                 `INSERT INTO RefundRequest (ticket_id, original_user_id, time_before_journey_hours, potential_partial_refund, status)
                  VALUES (?, ?, ?, ?, 'PENDING_RESALE')`,
