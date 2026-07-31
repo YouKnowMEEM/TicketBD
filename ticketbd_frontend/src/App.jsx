@@ -599,21 +599,14 @@ export function App() {
         setCheckoutLoading(true);
 
         try {
-            // 1. Grab your user's token (adjust if you store it differently, like in sessionStorage)
-            const token = localStorage.getItem('token');
-
-            // 2. Use standard fetch so we guarantee the Content-Type header stays intact
-            const response = await fetch(`${API_BASE}/api/checkout`, {
+            // Use the authFetch helper you already created! It automatically adds the correct 'tb_token'
+            const response = await authFetch(`${API_BASE}/api/checkout`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify(checkoutPayload) // Back to stringify!
+                body: JSON.stringify(checkoutPayload)
             });
 
             if (response.status === 401 || response.status === 403) {
-                return handleSessionExpired(); // Assuming this is defined in your component
+                return handleSessionExpired();
             }
 
             const data = await response.json();
@@ -634,7 +627,6 @@ export function App() {
         }
         setCheckoutLoading(false);
     };
-
     // --- VERIFY TICKET (public, no login required) ---
     const handleVerifyTicket = async (e) => {
         e.preventDefault();
