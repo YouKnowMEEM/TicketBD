@@ -334,29 +334,29 @@ export function App() {
         doc.text('Powered by', 185, 17, { align: 'right' });
         doc.setFont("helvetica", "bold");
         doc.setTextColor(0, 0, 0);
-        doc.text('Shohoz Synesis Vincen JV', 185, 21, { align: 'right' });
+        doc.text('Bermuda Triangle', 185, 21, { align: 'right' });
 
         // QR Code Box graphic
-        doc.setDrawColor(50, 50, 50);
-        doc.setFillColor(255, 255, 255);
-        doc.setLineWidth(0.5);
-        doc.rect(165, 24, 22, 22, 'FD');
-        doc.setFontSize(6);
-        doc.setTextColor(80, 80, 80);
-        doc.text('SCAN QR', 176, 35, { align: 'center' });
-        doc.setFontSize(5);
-        doc.text(ticket.transaction_id || 'VERIFY', 176, 38, { align: 'center' });
+        //doc.setDrawColor(50, 50, 50);
+        //doc.setFillColor(255, 255, 255);
+        //doc.setLineWidth(0.5);
+        //doc.rect(165, 24, 22, 22, 'FD');
+        //doc.setFontSize(6);
+        //doc.setTextColor(80, 80, 80);
+        //doc.text('SCAN QR', 176, 35, { align: 'center' });
+        //doc.setFontSize(5);
+        //doc.text(ticket.transaction_id || 'VERIFY', 176, 38, { align: 'center' });
 
         // 3. Passenger Greeting Notice
-        doc.setFontSize(9);
-        doc.setTextColor(...textDark);
-        doc.setFont("helvetica", "bold");
-        doc.text(`Dear CUET Student (${studentId}),`, 15, 36);
-
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(8);
-        const textMsg = "Your request to book e-ticket for your journey in Bangladesh Railway was successful. You can travel on the train mentioned in the ticket subject to showing your NID or Photo ID card. The details of your e-ticket are as below:";
-        doc.text(doc.splitTextToSize(textMsg, 145), 15, 41);
+        // doc.setFontSize(9);
+        // doc.setTextColor(...textDark);
+        // doc.setFont("helvetica", "bold");
+        // doc.text(`Dear CUET Student (${studentId}),`, 15, 36);
+        //
+        // doc.setFont("helvetica", "normal");
+        // doc.setFontSize(8);
+        // const textMsg = "Your request to book e-ticket for your journey in Bangladesh Railway was successful. You can travel on the train mentioned in the ticket subject to showing your NID or Photo ID card. The details of your e-ticket are as below:";
+        // doc.text(doc.splitTextToSize(textMsg, 145), 15, 41);
 
         let curY = 52;
 
@@ -370,10 +370,10 @@ export function App() {
 
         curY += 7;
 
-        const baseFare = parseFloat(ticket.price_paid || 0);
-        const vat = baseFare * 0.15;
+        const totalFare = parseFloat(ticket.price_paid || 0);
+        const vat = totalFare * 0.15;
         const serviceCharge = 20.00;
-        const totalFare = baseFare + vat + serviceCharge;
+        const baseFare = totalFare * 0.75;
 
         const journeyTableData = [
             ['Issue Date & Time:', new Date(ticket.payment_date || Date.now()).toLocaleString()],
@@ -381,15 +381,13 @@ export function App() {
             ['Train Name & Number:', `${ticket.train_name} [${ticket.train_number}]`],
             ['From Station:', ticket.start_station],
             ['To Station:', ticket.end_station],
-            ['Class Name:', ticket.class || 'SNIGDHA'],
+            ['Class Name:', ticket.class],
             ['Coach Name / Seat(s):', `${ticket.coach_name}-${ticket.seat_number}`],
             ['No. of Seats:', '1'],
-            ['No. of Adult Passenger(s):', '1'],
-            ['No. of Senior Citizen Passenger(s):', '0'],
-            ['No. of Child Passenger(s):', '0'],
+            ['No. of Passenger(s):', '1'],
             ['Fare:', `BDT ${baseFare.toFixed(2)}`],
             ['VAT:', `BDT ${vat.toFixed(2)}`],
-            ['Service Charge:', `BDT ${serviceCharge.toFixed(2)}`],
+            //['Service Charge:', `BDT ${serviceCharge.toFixed(2)}`],
             ['Total Fare:**', `BDT ${totalFare.toFixed(2)}`]
         ];
 
@@ -427,7 +425,7 @@ export function App() {
         doc.setFontSize(7);
         doc.setFont("helvetica", "normal");
         doc.setTextColor(120, 120, 120);
-        doc.text('** Total Fare includes BDT 50 Bedding Charges per seat for AC_B and F_BERTH seat classes.', 15, curY + 4);
+        doc.text('** Total Fare does not includes BDT 20 Service Charges per seat.', 15, curY + 4);
 
         curY += 9;
 
@@ -443,9 +441,9 @@ export function App() {
 
         const passengerTableData = [
             ['Passenger Name:', `CUET Student (${studentId})`],
-            ['Identification Type:', 'Student ID / NID'],
+            ['Identification Type:', 'Student ID'],
             ['Identification Number:', studentId],
-            ['Mobile Number:', ticket.user_phone || '019*****992'],
+            ['Mobile Number:', ticket.user_phone],
             ['PNR Number:', ticket.transaction_id || 'N/A']
         ];
 
@@ -484,10 +482,9 @@ export function App() {
         doc.setTextColor(90, 90, 90);
 
         const notes = [
-            '• Carrying NID or Photo ID (Student ID) while travelling is mandatory for each passenger.',
+            '• Carrying NID or Student ID Card while travelling is mandatory for each passenger.',
             '• You can carry either a soft copy or printed copy of your e-ticket while travelling.',
-            '• No need to print e-ticket from the counter.',
-            '• It is mandatory for children between 3 to 12 years old to purchase minor tickets.'
+            '• No need to print e-ticket from the counter.'
         ];
 
         notes.forEach(note => {
