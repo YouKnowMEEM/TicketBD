@@ -593,6 +593,9 @@ export function App() {
             // 2. Send it to the backend using authFetch
             const response = await authFetch(`${API_BASE}/api/checkout`, {
                 method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json' // 🛑 This is the magic key!
+                },
                 body: JSON.stringify(checkoutPayload)
             });
 
