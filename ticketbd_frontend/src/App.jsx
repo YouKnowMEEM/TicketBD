@@ -567,6 +567,10 @@ export function App() {
 
     // --- UNIFIED CHECKOUT HANDLER ---
     const handleCheckout = async (trainId) => {
+        // 🛑 DEBUG LOGS
+        console.log("=== DEBUGGING CHECKOUT ===");
+        console.log("1. Raw selectedSeats array:", selectedSeats);
+
         if (selectedSeats.length === 0) {
             alert("Please select at least one seat.");
             return;
@@ -575,7 +579,11 @@ export function App() {
         const fromId = getStationIdByName(fromStationName);
         const toId = getStationIdByName(toStationName);
 
-        // 1. Package the data exactly how the backend expects it
+        // Try both property names just to be safe while debugging
+        const mappedBookings = selectedSeats.map(seat => ({
+            seat_id: seat.seat_id !== undefined ? seat.seat_id : seat.id
+        }));
+
         const checkoutPayload = {
             userId: studentId,
             trainId: trainId,
@@ -583,18 +591,18 @@ export function App() {
             endStationId: toId,
             journeyDate: journeyDate,
             paymentMethod: 'bKash',
-            // 🛑 FIXED: Changed seat.id to seat.seat_id to match the database response
-            bookings: selectedSeats.map(seat => ({ seat_id: seat.seat_id }))
+            bookings: mappedBookings
         };
+
+        console.log("2. Final Payload being sent:", checkoutPayload);
 
         setCheckoutLoading(true);
 
         try {
-            // 2. Send it to the backend using authFetch
             const response = await authFetch(`${API_BASE}/api/checkout`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json' // Ensures backend reads it as JSON
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(checkoutPayload)
             });
@@ -604,12 +612,13 @@ export function App() {
             }
 
             const data = await response.json();
+            console.log("3. Backend Response:", data);
 
             if (data.success) {
                 alert("Booking confirmed! Your tickets have been generated.");
                 setSelectedSeats([]);
                 fetchCoachSeats(trainId, selectedCoach, journeyDate);
-                setProfileTab('tickets'); // Or however you handle redirecting to success page
+                setProfileTab('tickets');
                 loadProfileData();
             } else {
                 alert("Checkout failed: " + data.message);
