@@ -604,7 +604,7 @@ export function App() {
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(checkoutPayload)
+                body: checkoutPayload
             });
 
             const data = await response.json();
