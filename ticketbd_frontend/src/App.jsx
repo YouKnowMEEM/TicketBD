@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import jsPDF from 'jspdf';
 import './App.css';
 
@@ -93,6 +93,7 @@ export function App() {
 
     // --- Station State ---
     const [stationList, setStationList] = useState([]);
+
     // --- Auth / Session States ---
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [token, setToken] = useState(null);
@@ -108,7 +109,7 @@ export function App() {
     const [toStationName, setToStationName] = useState('');
     const [journeyDate, setJourneyDate] = useState('');
     const [displayDate, setDisplayDate] = useState('');
-    const [seatClass, setSeatClass] = useState('');
+    const [seatClass, setSeatClass] = useState('Snigdha');
     const [trains, setTrains] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
 
@@ -172,18 +173,12 @@ export function App() {
 
     // --- EFFECT 2: FETCH STATIONS FROM BACKEND ON LOAD ---
     useEffect(() => {
-        // We use API_BASE here instead of localhost!
         fetch(`${API_BASE}/api/stations`)
-            .then(res => {
-                if (!res.ok) throw new Error('Network response was not ok');
-                return res.json();
-            })
+            .then(res => res.json())
             .then(data => {
-                if (Array.isArray(data)) {
-                    setStationList(data);
-                }
+                if (Array.isArray(data)) setStationList(data);
             })
-            .catch(err => console.error("🛑 Failed to load stations:", err));
+            .catch(err => console.error("🛑 Failed to load stations from MySQL:", err));
     }, []);
 
     // --- EFFECT 3: RESTORE SESSION ON PAGE LOAD ---
@@ -567,9 +562,6 @@ export function App() {
 
     // --- UNIFIED CHECKOUT HANDLER ---
     const handleCheckout = async (trainId) => {
-        // 🛑 JSON STRINGIFY LOGS (Will print the actual key-value pairs clearly in Console)
-        console.log("1. Selected Seats JSON:", JSON.stringify(selectedSeats, null, 2));
-
         if (selectedSeats.length === 0) {
             alert("Please select at least one seat.");
             return;
@@ -578,12 +570,6 @@ export function App() {
         const fromId = getStationIdByName(fromStationName);
         const toId = getStationIdByName(toStationName);
 
-        // Smart fallback mapping to catch seat_id, id, or seatId
-        const mappedBookings = selectedSeats.map(seat => {
-            const id = seat.seat_id || seat.id || seat.seatId;
-            return { seat_id: id };
-        });
-
         const checkoutPayload = {
             userId: studentId,
             trainId: trainId,
@@ -591,26 +577,17 @@ export function App() {
             endStationId: toId,
             journeyDate: journeyDate,
             paymentMethod: 'bKash',
-            bookings: mappedBookings
+            selectedSeats: selectedSeats.map(seat => ({ seat_id: seat.id }))
         };
 
-        console.log("2. Payload JSON being sent:", JSON.stringify(checkoutPayload, null, 2));
-
         setCheckoutLoading(true);
-
         try {
-            // Use the authFetch helper you already created! It automatically adds the correct 'tb_token'
             const response = await authFetch(`${API_BASE}/api/checkout`, {
                 method: 'POST',
                 body: JSON.stringify(checkoutPayload)
             });
-
-            if (response.status === 401 || response.status === 403) {
-                return handleSessionExpired();
-            }
-
+            if (response.status === 401 || response.status === 403) return handleSessionExpired();
             const data = await response.json();
-            console.log("3. Backend Response:", data);
 
             if (data.success) {
                 alert("Booking confirmed! Your tickets have been generated.");
@@ -619,7 +596,7 @@ export function App() {
                 setProfileTab('tickets');
                 loadProfileData();
             } else {
-                alert("Checkout failed: " + (data.message || data.error));
+                alert("Checkout failed: " + data.message);
             }
         } catch (error) {
             console.error("Error during checkout:", error);
@@ -627,6 +604,7 @@ export function App() {
         }
         setCheckoutLoading(false);
     };
+
     // --- VERIFY TICKET (public, no login required) ---
     const handleVerifyTicket = async (e) => {
         e.preventDefault();
@@ -1157,7 +1135,6 @@ export function App() {
                         </div>
                     </div>
                 )}
-
                 {/* ================= RESULTS PAGE ================= */}
                 {view === 'results' && (
                     <div>
