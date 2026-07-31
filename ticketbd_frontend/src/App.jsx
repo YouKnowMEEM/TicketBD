@@ -88,6 +88,29 @@ function Spinner({ dark }) {
     return <span className={`tb-spinner ${dark ? 'dark' : ''}`} />;
 }
 
+// --- DATE FORMAT HELPERS ---
+const formatToDisplayDate = (yyyy_mm_dd) => {
+    if (!yyyy_mm_dd) return '';
+    const parts = yyyy_mm_dd.split('-');
+    if (parts.length === 3) {
+        const [y, m, d] = parts;
+        return `${d}/${m}/${y}`;
+    }
+    return yyyy_mm_dd;
+};
+
+const formatToDbDate = (dd_mm_yyyy) => {
+    if (!dd_mm_yyyy) return '';
+    const parts = dd_mm_yyyy.split('/');
+    if (parts.length === 3) {
+        const [d, m, y] = parts;
+        if (d.length === 2 && m.length === 2 && y.length === 4) {
+            return `${y}-${m}-${d}`;
+        }
+    }
+    return '';
+};
+
 export function App() {
     const [view, setView] = useState('home');
 
@@ -107,26 +130,40 @@ export function App() {
     // --- Search States ---
     const [fromStationName, setFromStationName] = useState('');
     const [toStationName, setToStationName] = useState('');
-    const [journeyDate, setJourneyDate] = useState('');
-    const [displayDate, setDisplayDate] = useState('');
+    const [journeyDate, setJourneyDate] = useState(''); // Stores YYYY-MM-DD for DB queries
+    const [displayDate, setDisplayDate] = useState(''); // Stores DD/MM/YYYY for UI
     const [seatClass, setSeatClass] = useState('Snigdha');
     const [trains, setTrains] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
 
-    // --- Seat Layout States ---
+    // --- Seat Layout & Lock States ---
     const [expandedTrainId, setExpandedTrainId] = useState(null);
     const [selectedSeats, setSelectedSeats] = useState([]);
     const [selectedCoach, setSelectedCoach] = useState('');
     const [coachSeats, setCoachSeats] = useState([]);
+    const [coachSummary, setCoachSummary] = useState({}); // Dynamic seat counts: coachName -> { available, total, booked }
     const [seatsLoading, setSeatsLoading] = useState(false);
-    const [checkoutLoading, setCheckoutLoading] = useState(false);
 
-    // --- My Profile/Tickets States ---
+    // --- Payment & 4-Minute Lock Modal ---
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [lockedBookingIds, setLockedBookingIds] = useState([]);
+    const [lockSecondsLeft, setLockSecondsLeft] = useState(240); // 4 minutes
+    const [paymentMethod, setPaymentMethod] = useState('bKash');
+    const [checkoutLoading, setCheckoutLoading] = useState(false);
+    const lockTimerRef = useRef(null);
+
+    // --- My Profile / Tickets States ---
     const [myTickets, setMyTickets] = useState([]);
     const [profileTab, setProfileTab] = useState('tickets');
     const [userProfile, setUserProfile] = useState({ username: '', email: '', phone_number: '', password: '' });
     const [profileMessage, setProfileMessage] = useState('');
     const [profileSaving, setProfileSaving] = useState(false);
+
+    // --- Partial Cancellation Modal States ---
+    const [showCancelModal, setShowCancelModal] = useState(false);
+    const [selectedCancelTicketIds, setSelectedCancelTicketIds] = useState([]);
+    const [cancelModalData, setCancelModalData] = useState(null); // { seats: [...], totalFare, serviceFee, estimatedRefund }
+    const [cancelLoading, setCancelLoading] = useState(false);
 
     // --- Verify Ticket / Contact modals ---
     const [showVerifyModal, setShowVerifyModal] = useState(false);
@@ -138,6 +175,7 @@ export function App() {
 
     const toInputRef = useRef(null);
     const dateInputRef = useRef(null);
+    const nativeDatePickerRef = useRef(null);
     const classInputRef = useRef(null);
 
     // --- DATE LIMIT CALCULATION (Current to Next 10 Days) ---
@@ -192,6 +230,26 @@ export function App() {
         }
     }, []);
 
+    // --- EFFECT 4: 4-MINUTE LOCK COUNTDOWN TIMER ---
+    useEffect(() => {
+        if (showPaymentModal && lockSecondsLeft > 0) {
+            lockTimerRef.current = setInterval(() => {
+                setLockSecondsLeft(prev => prev - 1);
+            }, 1000);
+        } else if (lockSecondsLeft <= 0 && showPaymentModal) {
+            clearInterval(lockTimerRef.current);
+            alert("⏰ Seat lock expired! The 4-minute payment window has ended. Please select your seats again.");
+            setShowPaymentModal(false);
+            setLockedBookingIds([]);
+            setSelectedSeats([]);
+            if (expandedTrainId && selectedCoach && journeyDate) {
+                fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate);
+                fetchCoachSummary(expandedTrainId, journeyDate);
+            }
+        }
+        return () => clearInterval(lockTimerRef.current);
+    }, [showPaymentModal, lockSecondsLeft]);
+
     // --- AUTH-AWARE FETCH HELPER ---
     const authFetch = (url, options = {}) => {
         const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
@@ -240,13 +298,11 @@ export function App() {
         const lightGray = [150, 150, 150];
         const borderColor = [200, 200, 200];
 
-        // ==========================================
-        // 1. TOP BANNER HEADER
-        // ==========================================
+        // Header Banner
         doc.setFillColor(...primaryGreen);
-        doc.rect(0, 0, 210, 25, 'F'); // Full width green rectangle
+        doc.rect(0, 0, 210, 25, 'F');
 
-        doc.setTextColor(255, 255, 255); // White text
+        doc.setTextColor(255, 255, 255);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(18);
         doc.text('BANGLADESH RAILWAY', 105, 12, { align: 'center' });
@@ -255,9 +311,7 @@ export function App() {
         doc.setFontSize(10);
         doc.text('E-TICKET / BOARDING PASS', 105, 18, { align: 'center' });
 
-        // ==========================================
-        // 2. PNR & BARCODE AREA
-        // ==========================================
+        // PNR & Barcode
         doc.setTextColor(0, 0, 0);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(10);
@@ -272,14 +326,11 @@ export function App() {
         doc.setFont("helvetica", "normal");
         doc.text(`Issued: ${new Date(ticket.payment_date).toLocaleString()}`, 190, 38, { align: 'right' });
 
-        // ==========================================
-        // 3. JOURNEY DETAILS BOX
-        // ==========================================
+        // Journey Box
         doc.setDrawColor(...borderColor);
         doc.setFillColor(252, 252, 252);
-        doc.roundedRect(20, 45, 170, 40, 3, 3, 'FD'); // Filled and stroked rounded box
+        doc.roundedRect(20, 45, 170, 40, 3, 3, 'FD');
 
-        // Labels
         doc.setFontSize(8);
         doc.setTextColor(...lightGray);
         doc.text('FROM', 25, 52);
@@ -287,7 +338,6 @@ export function App() {
         doc.text('TRAIN', 25, 70);
         doc.text('JOURNEY DATE', 105, 70);
 
-        // Values
         doc.setFontSize(12);
         doc.setTextColor(...darkGray);
         doc.setFont("helvetica", "bold");
@@ -296,14 +346,11 @@ export function App() {
 
         doc.setFontSize(11);
         doc.text(`${ticket.train_name} [${ticket.train_number}]`, 25, 76);
-        doc.text(ticket.journey_date, 105, 76);
+        doc.text(formatToDisplayDate(ticket.journey_date), 105, 76);
 
-        // ==========================================
-        // 4. PASSENGER & SEAT DETAILS BOX
-        // ==========================================
+        // Passenger Box
         doc.roundedRect(20, 90, 170, 25, 3, 3, 'FD');
 
-        // Labels
         doc.setFontSize(8);
         doc.setTextColor(...lightGray);
         doc.setFont("helvetica", "normal");
@@ -311,7 +358,6 @@ export function App() {
         doc.text('COACH', 105, 97);
         doc.text('SEAT / BERTH', 145, 97);
 
-        // Values
         doc.setFontSize(11);
         doc.setTextColor(...darkGray);
         doc.setFont("helvetica", "bold");
@@ -320,13 +366,11 @@ export function App() {
         doc.setTextColor(...primaryGreen);
         doc.text(ticket.seat_number || 'N/A', 145, 104);
 
-        // ==========================================
-        // 5. PAYMENT BREAKDOWN
-        // ==========================================
+        // Payment Breakdown
         doc.setTextColor(...darkGray);
         doc.setFontSize(11);
         doc.text('FARE DETAILS', 20, 130);
-        doc.line(20, 133, 190, 133); // Underline
+        doc.line(20, 133, 190, 133);
 
         const baseFare = parseFloat(ticket.price_paid || 0);
         const vat = baseFare * 0.15;
@@ -336,15 +380,14 @@ export function App() {
         doc.setFontSize(9);
         doc.setFont("helvetica", "normal");
         doc.text('Base Ticket Fare:', 20, 142);
-        doc.text(`BDT ${baseFare.toFixed(2)}`, 190, 142, { align: 'right' });
+        doc.text(`Tk. ${baseFare.toFixed(2)}`, 190, 142, { align: 'right' });
 
         doc.text('VAT (15%):', 20, 148);
-        doc.text(`BDT ${vat.toFixed(2)}`, 190, 148, { align: 'right' });
+        doc.text(`Tk. ${vat.toFixed(2)}`, 190, 148, { align: 'right' });
 
         doc.text('Service Charge:', 20, 154);
-        doc.text(`BDT ${serviceCharge.toFixed(2)}`, 190, 154, { align: 'right' });
+        doc.text(`Tk. ${serviceCharge.toFixed(2)}`, 190, 154, { align: 'right' });
 
-        // Total Line
         doc.setDrawColor(...lightGray);
         doc.line(130, 160, 190, 160);
 
@@ -353,11 +396,9 @@ export function App() {
         doc.setTextColor(0, 0, 0);
         doc.text('Total Amount Paid:', 130, 166);
         doc.setTextColor(...primaryGreen);
-        doc.text(`BDT ${total.toFixed(2)}`, 190, 166, { align: 'right' });
+        doc.text(`Tk. ${total.toFixed(2)}`, 190, 166, { align: 'right' });
 
-        // ==========================================
-        // 6. INSTRUCTIONS & FOOTER
-        // ==========================================
+        // Instructions
         doc.setFont("helvetica", "bold");
         doc.setFontSize(9);
         doc.setTextColor(...darkGray);
@@ -376,14 +417,12 @@ export function App() {
             doc.text(inst, 20, 196 + (index * 5));
         });
 
-        // Footer greeting
         doc.setTextColor(...primaryGreen);
         doc.setFont("helvetica", "bold");
         doc.text('Wishing you a pleasant and safe journey', 105, 275, { align: 'center' });
         doc.setFont("helvetica", "normal");
         doc.text('Bangladesh Railway', 105, 280, { align: 'center' });
 
-        // Save
         doc.save(`TicketBD_${ticket.transaction_id}.pdf`);
     };
 
@@ -482,35 +521,89 @@ export function App() {
         setProfileSaving(false);
     };
 
-    // --- CANCEL TICKET HANDLER ---
-    const handleCancelTicket = async (ticketId) => {
-        const isConfirmed = window.confirm(
-            "Are you sure you want to cancel this ticket?\n\n" +
-            "If another passenger books this exact seat, you'll receive a FULL refund. " +
-            "Otherwise, a partial refund (based on how close to departure you cancelled) is issued once the journey date passes."
-        );
-        if (!isConfirmed) return;
+    // --- OPEN CANCELLATION MODAL FOR PARTIAL / FULL SEAT SELECTION ---
+    const openCancelModal = (ticketList) => {
+        const activeTickets = ticketList.filter(t => t.ticket_status === 'ACTIVE');
+        if (activeTickets.length === 0) return;
 
+        // Default: select all active tickets in this group
+        const initialSelectedIds = activeTickets.map(t => t.ticket_id);
+        setSelectedCancelTicketIds(initialSelectedIds);
+
+        const totalFare = activeTickets.reduce((sum, t) => sum + parseFloat(t.price_paid || 0), 0);
+        const serviceFee = activeTickets.length * 20.00;
+        const estimatedRefund = Math.max(0, totalFare - serviceFee);
+
+        setCancelModalData({
+            tickets: activeTickets,
+            pnr: activeTickets[0].transaction_id,
+            totalFare,
+            serviceFee,
+            estimatedRefund
+        });
+        setShowCancelModal(true);
+    };
+
+    // --- RECALCULATE CANCELLATION SUMMARY WHEN CHECKBOX SELECTION CHANGES ---
+    const toggleCancelTicketSelection = (ticketId) => {
+        setSelectedCancelTicketIds(prev => {
+            const updated = prev.includes(ticketId)
+                ? prev.filter(id => id !== ticketId)
+                : [...prev, ticketId];
+
+            if (cancelModalData) {
+                const selectedTickets = cancelModalData.tickets.filter(t => updated.includes(t.ticket_id));
+                const totalFare = selectedTickets.reduce((sum, t) => sum + parseFloat(t.price_paid || 0), 0);
+                const serviceFee = selectedTickets.length * 20.00;
+                const estimatedRefund = Math.max(0, totalFare - serviceFee);
+
+                setCancelModalData(prevData => ({
+                    ...prevData,
+                    totalFare,
+                    serviceFee,
+                    estimatedRefund
+                }));
+            }
+
+            return updated;
+        });
+    };
+
+    // --- CONFIRM TICKET CANCELLATION HANDLER ---
+    const handleConfirmCancellation = async () => {
+        if (selectedCancelTicketIds.length === 0) {
+            alert("Please select at least one seat to cancel.");
+            return;
+        }
+
+        setCancelLoading(true);
         try {
             const response = await authFetch(`${API_BASE}/api/cancel-ticket`, {
                 method: 'POST',
-                body: JSON.stringify({ ticketId, studentId })
+                body: JSON.stringify({
+                    ticketIds: selectedCancelTicketIds,
+                    studentId
+                })
             });
             if (response.status === 401 || response.status === 403) return handleSessionExpired();
             const data = await response.json();
             if (data.success) {
                 alert(data.message);
+                setShowCancelModal(false);
+                setSelectedCancelTicketIds([]);
+                setCancelModalData(null);
                 loadProfileData();
             } else {
-                alert("Failed to cancel: " + data.message);
+                alert("Cancellation failed: " + data.message);
             }
         } catch (error) {
             console.error("Cancellation error:", error);
-            alert("A network error occurred while trying to cancel the ticket.");
+            alert("A network error occurred while trying to cancel.");
         }
+        setCancelLoading(false);
     };
 
-    // --- SEARCH AND BOOKING HANDLERS ---
+    // --- SEARCH TRAINS HANDLER ---
     const searchTrains = async (e) => {
         e.preventDefault();
         if (!isLoggedIn) {
@@ -521,6 +614,10 @@ export function App() {
         const toId = getStationIdByName(toStationName);
         if (!fromId || !toId) {
             alert("Please select valid station names from the list!");
+            return;
+        }
+        if (!journeyDate) {
+            alert("Please select or type a valid journey date in DD/MM/YYYY format.");
             return;
         }
         setSearchLoading(true);
@@ -538,7 +635,7 @@ export function App() {
         setSearchLoading(false);
     };
 
-    // --- DYNAMIC SEAT FETCH API ---
+    // --- DYNAMIC SEAT & COACH SUMMARY FETCH ---
     const fetchCoachSeats = async (targetTrainId, targetCoach, targetDate) => {
         setSeatsLoading(true);
         try {
@@ -551,17 +648,33 @@ export function App() {
         setSeatsLoading(false);
     };
 
+    const fetchCoachSummary = async (targetTrainId, targetDate) => {
+        try {
+            const response = await fetch(`${API_BASE}/api/coach-summary?trainId=${targetTrainId}&journeyDate=${targetDate}`);
+            const data = await response.json();
+            if (data.success) setCoachSummary(data.summary || {});
+        } catch (err) {
+            console.error("Failed to fetch coach summary", err);
+        }
+    };
+
+    // --- SEAT SELECTION HANDLER (WITH MAX 4 SEATS PER TRANSACTION CHECK) ---
     const handleSeatSelect = (seatId, seatName, isBooked) => {
         if (isBooked) return;
         setSelectedSeats((prevSelected) => {
             const isAlreadySelected = prevSelected.some(seat => seat.id === seatId);
             if (isAlreadySelected) return prevSelected.filter(seat => seat.id !== seatId);
+
+            if (prevSelected.length >= 4) {
+                alert("You can select a maximum of 4 seats per booking.");
+                return prevSelected;
+            }
             return [...prevSelected, { id: seatId, name: seatName }];
         });
     };
 
-    // --- UNIFIED CHECKOUT HANDLER ---
-    const handleCheckout = async (trainId) => {
+    // --- STEP 1: PROCEED TO PAYMENT (LOCK SEATS FOR 4 MINUTES) ---
+    const handleProceedToPayment = async (trainId) => {
         if (selectedSeats.length === 0) {
             alert("Please select at least one seat.");
             return;
@@ -570,14 +683,50 @@ export function App() {
         const fromId = getStationIdByName(fromStationName);
         const toId = getStationIdByName(toStationName);
 
-        const checkoutPayload = {
+        const lockPayload = {
             userId: studentId,
             trainId: trainId,
             startStationId: fromId,
             endStationId: toId,
             journeyDate: journeyDate,
-            paymentMethod: 'bKash',
             selectedSeats: selectedSeats.map(seat => ({ seat_id: seat.id }))
+        };
+
+        setCheckoutLoading(true);
+        try {
+            const response = await authFetch(`${API_BASE}/api/lock-seats`, {
+                method: 'POST',
+                body: JSON.stringify(lockPayload)
+            });
+            if (response.status === 401 || response.status === 403) return handleSessionExpired();
+            const data = await response.json();
+
+            if (data.success) {
+                setLockedBookingIds(data.bookingIds);
+                setLockSecondsLeft(240); // Reset timer to 4 minutes
+                setShowPaymentModal(true);
+            } else {
+                // Display exact error message for active seat limit violation
+                alert(data.message);
+            }
+        } catch (error) {
+            console.error("Error locking seats:", error);
+            alert("A network error occurred while locking your seats.");
+        }
+        setCheckoutLoading(false);
+    };
+
+    // --- STEP 2: FINALIZE CHECKOUT AFTER PAYMENT CONFIRMATION ---
+    const handleConfirmPayment = async () => {
+        if (lockedBookingIds.length === 0) {
+            alert("No locked seats found.");
+            return;
+        }
+
+        const checkoutPayload = {
+            userId: studentId,
+            bookingIds: lockedBookingIds,
+            paymentMethod: paymentMethod
         };
 
         setCheckoutLoading(true);
@@ -590,9 +739,14 @@ export function App() {
             const data = await response.json();
 
             if (data.success) {
-                alert("Booking confirmed! Your tickets have been generated.");
+                alert("🎉 Payment confirmed! Your e-tickets have been generated.");
+                setShowPaymentModal(false);
                 setSelectedSeats([]);
-                fetchCoachSeats(trainId, selectedCoach, journeyDate);
+                setLockedBookingIds([]);
+                if (expandedTrainId && selectedCoach && journeyDate) {
+                    fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate);
+                    fetchCoachSummary(expandedTrainId, journeyDate);
+                }
                 setProfileTab('tickets');
                 loadProfileData();
             } else {
@@ -633,13 +787,12 @@ export function App() {
     // --- HELPER: CHECK IF TICKET CAN BE CANCELLED ---
     const isCancellable = (journeyDateStr) => {
         const today = new Date();
-        today.setHours(0, 0, 0, 0); // Start of today (midnight)
+        today.setHours(0, 0, 0, 0);
 
-        // Properly parse the "YYYY-MM-DD" string
         const [year, month, day] = journeyDateStr.split('-');
-        const journeyDate = new Date(year, month - 1, day);
+        const journeyDateObj = new Date(year, month - 1, day);
 
-        return journeyDate >= today;
+        return journeyDateObj >= today;
     };
 
     // --- Refund status -> badge/label helpers ---
@@ -654,6 +807,21 @@ export function App() {
                 return { label: 'Refund pending', cls: 'badge-pending' };
         }
     };
+
+    // Format seconds left to MM:SS
+    const formatTimeLeft = (sec) => {
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    };
+
+    // Group ticket history by transaction ID (PNR)
+    const groupedTickets = myTickets.reduce((groups, ticket) => {
+        const key = ticket.transaction_id || `SINGLE-${ticket.ticket_id}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(ticket);
+        return groups;
+    }, {});
 
     return (
         <div className="app-shell">
@@ -717,7 +885,7 @@ export function App() {
                                     </span>
                                 </div>
                                 <p style={{ margin: '4px 0' }}><strong>Train:</strong> {verifyResult.train_name} ({verifyResult.train_number})</p>
-                                <p style={{ margin: '4px 0' }}><strong>Journey Date:</strong> {verifyResult.journey_date}</p>
+                                <p style={{ margin: '4px 0' }}><strong>Journey Date:</strong> {formatToDisplayDate(verifyResult.journey_date)}</p>
                                 <p style={{ margin: '4px 0' }}><strong>Route:</strong> {verifyResult.start_station} → {verifyResult.end_station}</p>
                                 <p style={{ margin: '4px 0' }}><strong>Seat:</strong> {verifyResult.coach_name}-{verifyResult.seat_number} ({verifyResult.class})</p>
                             </div>
@@ -740,6 +908,152 @@ export function App() {
                         <p style={{ fontSize: '13px', color: 'var(--ink-soft)', marginTop: '16px' }}>
                             For booking issues, include your PNR (found on your e-ticket) when you reach out.
                         </p>
+                    </div>
+                </div>
+            )}
+
+            {/* ================= PAYMENT & 4-MINUTE LOCK MODAL ================= */}
+            {showPaymentModal && (
+                <div className="tb-modal-overlay">
+                    <div className="tb-modal" style={{ maxWidth: '480px' }}>
+                        <div style={{
+                            backgroundColor: 'var(--amber-light)', color: 'var(--amber-dark)', padding: '10px 14px',
+                            borderRadius: '6px', fontWeight: 'bold', fontSize: '14px', textAlign: 'center', marginBottom: '18px',
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+                        }}>
+                            <span>🔒 Seats Locked Temporarily</span>
+                            <span style={{ fontSize: '16px', fontFamily: 'var(--font-mono)' }}>⏱️ {formatTimeLeft(lockSecondsLeft)}</span>
+                        </div>
+
+                        <h2 style={{ margin: '0 0 12px 0', fontSize: '20px' }}>Complete Your Booking</h2>
+                        <p style={{ fontSize: '13px', color: 'var(--ink-soft)', marginBottom: '15px' }}>
+                            Your selected seats are reserved for 4 minutes. Please select your payment method to finalize.
+                        </p>
+
+                        <div style={{ backgroundColor: '#f8fafc', padding: '14px', borderRadius: '6px', border: '1px solid var(--line)', marginBottom: '18px', fontSize: '13px' }}>
+                            <div style={{ marginBottom: '6px' }}><strong>Seats:</strong> {selectedSeats.map(s => s.name).join(', ')}</div>
+                            <div style={{ marginBottom: '6px' }}><strong>Journey Date:</strong> {formatToDisplayDate(journeyDate)}</div>
+                            <div style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--rail-green)', marginTop: '10px' }}>
+                                Total Amount: ৳ {(() => {
+                                const train = trains.find(t => t.train_id === expandedTrainId);
+                                const fare = (train && train.fares && train.fares[seatClass]) ? train.fares[seatClass] : 0;
+                                return (fare * selectedSeats.length).toFixed(2);
+                            })()}
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', marginBottom: '8px' }}>Select Payment Gateway</label>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                                {['bKash', 'Nagad', 'Rocket'].map(pm => (
+                                    <div
+                                        key={pm}
+                                        onClick={() => setPaymentMethod(pm)}
+                                        style={{
+                                            padding: '10px', textAlign: 'center', borderRadius: '6px', cursor: 'pointer',
+                                            fontWeight: 'bold', fontSize: '13px',
+                                            border: paymentMethod === pm ? '2px solid var(--rail-green)' : '1px solid var(--line)',
+                                            backgroundColor: paymentMethod === pm ? 'var(--rail-green-light)' : '#fff',
+                                            color: paymentMethod === pm ? 'var(--rail-green-dark)' : 'var(--ink)'
+                                        }}
+                                    >
+                                        {pm}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button
+                                className="btn btn-ghost"
+                                style={{ flex: 1, padding: '12px' }}
+                                onClick={() => {
+                                    setShowPaymentModal(false);
+                                    setLockedBookingIds([]);
+                                }}
+                            >
+                                CANCEL
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                style={{ flex: 2, padding: '12px' }}
+                                disabled={checkoutLoading}
+                                onClick={handleConfirmPayment}
+                            >
+                                {checkoutLoading ? <Spinner /> : 'CONFIRM & PAY'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ================= PARTIAL / FULL CANCELLATION MODAL ================= */}
+            {showCancelModal && cancelModalData && (
+                <div className="tb-modal-overlay" onClick={() => setShowCancelModal(false)}>
+                    <div className="tb-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+                        <button className="tb-modal-close" onClick={() => setShowCancelModal(false)}>✕</button>
+                        <span className="eyebrow" style={{ color: 'var(--red)' }}>Ticket Cancellation</span>
+                        <h2 style={{ margin: '4px 0 10px 0', fontSize: '20px' }}>Select Seats to Cancel</h2>
+                        <p style={{ fontSize: '13px', color: 'var(--ink-soft)', marginBottom: '16px' }}>
+                            PNR: <strong>{cancelModalData.pnr}</strong> — Select individual seats to cancel. Remaining seats stay active.
+                        </p>
+
+                        <div style={{ marginBottom: '18px', display: 'grid', gap: '10px', maxHeight: '180px', overflowY: 'auto' }}>
+                            {cancelModalData.tickets.map(t => {
+                                const isChecked = selectedCancelTicketIds.includes(t.ticket_id);
+                                return (
+                                    <label
+                                        key={t.ticket_id}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                            padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--line)',
+                                            backgroundColor: isChecked ? 'var(--red-light)' : '#fff', cursor: 'pointer'
+                                        }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={() => toggleCancelTicketSelection(t.ticket_id)}
+                                                style={{ width: '16px', height: '16px', accentColor: 'var(--red)' }}
+                                            />
+                                            <span style={{ fontWeight: 'bold', fontSize: '14px' }}>Seat {t.coach_name}-{t.seat_number} ({t.class})</span>
+                                        </div>
+                                        <span style={{ fontSize: '13px', fontWeight: 'bold' }}>৳ {parseFloat(t.price_paid).toFixed(2)}</span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+
+                        {/* Refund Formula Breakdown (Requirement 8) */}
+                        <div style={{ backgroundColor: '#f8fafc', padding: '14px', borderRadius: '6px', border: '1px solid var(--line)', marginBottom: '20px', fontSize: '13px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                <span>Selected Seat Fare:</span>
+                                <strong>৳ {cancelModalData.totalFare.toFixed(2)}</strong>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', color: 'var(--red)' }}>
+                                <span>Service Fee (৳ 20 / seat):</span>
+                                <strong>- ৳ {cancelModalData.serviceFee.toFixed(2)}</strong>
+                            </div>
+                            <div style={{ borderTop: '1px solid var(--line)', paddingTop: '8px', marginTop: '6px', display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: 'bold', color: 'var(--rail-green)' }}>
+                                <span>Estimated Refund Amount:</span>
+                                <span>৳ {cancelModalData.estimatedRefund.toFixed(2)}</span>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button className="btn btn-ghost" style={{ flex: 1, padding: '12px' }} onClick={() => setShowCancelModal(false)}>
+                                CANCEL
+                            </button>
+                            <button
+                                className="btn btn-danger"
+                                style={{ flex: 2, padding: '12px' }}
+                                disabled={cancelLoading || selectedCancelTicketIds.length === 0}
+                                onClick={handleConfirmCancellation}
+                            >
+                                {cancelLoading ? <Spinner /> : `CANCEL ${selectedCancelTicketIds.length} SEAT(S)`}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -861,7 +1175,7 @@ export function App() {
                     </div>
                 )}
 
-                {/* ================= PROFILE / MY TICKETS PAGE ================= */}
+                {/* ================= PROFILE / MY TICKETS PAGE (NEWEST FIRST) ================= */}
                 {view === 'profile' && (
                     <div style={{ maxWidth: '900px', margin: '40px auto', padding: '0 20px' }}>
                         <div style={{ display: 'flex', gap: '20px', borderBottom: '2px solid var(--line)', marginBottom: '25px' }}>
@@ -887,65 +1201,70 @@ export function App() {
 
                         {profileTab === 'tickets' && (
                             <div>
-                                {myTickets.length === 0 ? (
+                                {Object.keys(groupedTickets).length === 0 ? (
                                     <div className="empty-state">
                                         <span className="icon">🎫</span>
                                         You have no booked tickets in the last 15 days.
                                     </div>
                                 ) : (
                                     <div style={{ display: 'grid', gap: '22px' }}>
-                                        {myTickets.map(ticket => {
-                                            const badge = refundBadge(ticket);
+                                        {Object.entries(groupedTickets).map(([pnr, ticketGroup]) => {
+                                            const firstTicket = ticketGroup[0];
+                                            const activeInGroup = ticketGroup.filter(t => t.ticket_status === 'ACTIVE');
+                                            const isGroupActive = activeInGroup.length > 0;
+                                            const seatListStr = ticketGroup.map(t => `${t.coach_name}-${t.seat_number}`).join(', ');
+                                            const badge = refundBadge(firstTicket);
+
                                             return (
-                                                <div key={ticket.ticket_id} className={`ticket-stub ${ticket.ticket_status === 'CANCELLED' ? 'is-cancelled' : ''}`}>
+                                                <div key={pnr} className={`ticket-stub ${!isGroupActive ? 'is-cancelled' : ''}`}>
                                                     <div className="ticket-stub-main">
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
                                                             <h3 style={{ margin: 0, color: '#2c3e50', fontSize: '17px' }}>
-                                                                {ticket.train_name} ({ticket.train_number})
+                                                                {firstTicket.train_name} ({firstTicket.train_number})
                                                             </h3>
                                                             {badge && <span className={`badge ${badge.cls}`}>{badge.label}</span>}
                                                         </div>
-                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Journey:</strong> {ticket.journey_date}</p>
-                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Route:</strong> {ticket.start_station} to {ticket.end_station}</p>
-                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Seat:</strong> {ticket.coach_name}-{ticket.seat_number}</p>
-                                                        <p className="pnr" style={{ margin: '8px 0 0 0' }}>PNR: {ticket.transaction_id}</p>
+                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Journey:</strong> {formatToDisplayDate(firstTicket.journey_date)}</p>
+                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Route:</strong> {firstTicket.start_station} to {firstTicket.end_station}</p>
+                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Seat(s):</strong> {seatListStr}</p>
+                                                        <p className="pnr" style={{ margin: '8px 0 0 0' }}>PNR: {pnr}</p>
 
-                                                        {ticket.ticket_status === 'CANCELLED' && (
+                                                        {firstTicket.ticket_status === 'CANCELLED' && (
                                                             <div style={{
                                                                 margin: '14px 0 0 0', padding: '12px',
-                                                                backgroundColor: ticket.refund_status === 'PENDING_RESALE' ? 'var(--amber-light)' : 'var(--rail-green-light)',
+                                                                backgroundColor: firstTicket.refund_status === 'PENDING_RESALE' ? 'var(--amber-light)' : 'var(--rail-green-light)',
                                                                 borderRadius: '6px'
                                                             }}>
-                                                                {ticket.refund_status === 'PENDING_RESALE' && (
+                                                                {firstTicket.refund_status === 'PENDING_RESALE' && (
                                                                     <p style={{ margin: 0, fontSize: '12px', color: 'var(--amber-dark)', lineHeight: '1.5' }}>
-                                                                        ⏳ Waiting to see if this seat is resold.<br />
-                                                                        Estimated refund if not resold: <strong>BDT {ticket.potential_partial_refund ? parseFloat(ticket.potential_partial_refund).toFixed(2) : 'TBD'}</strong> (full refund if resold).
+                                                                        ⏳ Waiting to see if cancelled seat(s) are resold.<br />
+                                                                        Estimated refund if not resold: <strong>৳ {firstTicket.potential_partial_refund ? parseFloat(firstTicket.potential_partial_refund).toFixed(2) : 'TBD'}</strong> (full refund if resold).
                                                                     </p>
                                                                 )}
-                                                                {ticket.refund_status === 'RESOLD_FULL_REFUND' && (
+                                                                {firstTicket.refund_status === 'RESOLD_FULL_REFUND' && (
                                                                     <p style={{ margin: 0, fontSize: '12px', color: 'var(--rail-green-dark)', lineHeight: '1.5' }}>
-                                                                        ✅ Your seat was resold to another passenger — full refund of <strong>BDT {parseFloat(ticket.refunded_amount).toFixed(2)}</strong> issued.
+                                                                        ✅ Seat(s) resold to another passenger — full refund of <strong>৳ {parseFloat(firstTicket.refunded_amount).toFixed(2)}</strong> issued.
                                                                     </p>
                                                                 )}
-                                                                {ticket.refund_status === 'EXPIRED_PARTIAL_REFUND' && (
+                                                                {firstTicket.refund_status === 'EXPIRED_PARTIAL_REFUND' && (
                                                                     <p style={{ margin: 0, fontSize: '12px', color: 'var(--red)', lineHeight: '1.5' }}>
-                                                                        The journey date passed without a resale — partial refund of <strong>BDT {parseFloat(ticket.refunded_amount).toFixed(2)}</strong> issued.
+                                                                        Journey date passed — partial refund of <strong>৳ {parseFloat(firstTicket.refunded_amount).toFixed(2)}</strong> issued after deducting service fee.
                                                                     </p>
                                                                 )}
                                                             </div>
                                                         )}
                                                     </div>
 
-                                                    {ticket.ticket_status === 'ACTIVE' && (
+                                                    {isGroupActive && (
                                                         <>
                                                             <div className="ticket-stub-tear" />
                                                             <div className="ticket-stub-side" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                                <button className="btn btn-amber" onClick={(e) => { e.stopPropagation(); generatePDF(ticket); }}>
+                                                                <button className="btn btn-amber" onClick={(e) => { e.stopPropagation(); generatePDF(firstTicket); }}>
                                                                     DOWNLOAD PDF
                                                                 </button>
-                                                                {isCancellable(ticket.journey_date) ? (
-                                                                    <button className="btn btn-danger" style={{ fontSize: '12px' }} onClick={(e) => { e.stopPropagation(); handleCancelTicket(ticket.ticket_id); }}>
-                                                                        CANCEL TICKET
+                                                                {isCancellable(firstTicket.journey_date) ? (
+                                                                    <button className="btn btn-danger" style={{ fontSize: '12px' }} onClick={(e) => { e.stopPropagation(); openCancelModal(ticketGroup); }}>
+                                                                        CANCEL / PARTIAL CANCEL
                                                                     </button>
                                                                 ) : (
                                                                     <div style={{ textAlign: 'center' }}>
@@ -1058,12 +1377,13 @@ export function App() {
                                         </select>
                                     </div>
 
-                                    {/* 3. CUSTOM DATE INPUT (TYPABLE + CALENDAR ICON) */}
+                                    {/* 3. CUSTOM DATE INPUT (DD/MM/YYYY TYPABLE + VISIBLE CALENDAR ICON) */}
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                        <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>Date of Journey (DD/MM/YYYY)</label>
-                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-
-                                            {/* Text input for strict DD/MM/YYYY typing */}
+                                        <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>
+                                            Date of Journey (DD/MM/YYYY)
+                                        </label>
+                                        <div className="date-input-wrapper">
+                                            {/* Text input for manual typing in DD/MM/YYYY format */}
                                             <input
                                                 type="text"
                                                 ref={dateInputRef}
@@ -1071,50 +1391,55 @@ export function App() {
                                                 value={displayDate}
                                                 maxLength={10}
                                                 onChange={(e) => {
-                                                    // Auto-format typing to DD/MM/YYYY
                                                     let val = e.target.value.replace(/\D/g, '');
                                                     if (val.length > 2) val = val.slice(0, 2) + '/' + val.slice(2);
                                                     if (val.length > 5) val = val.slice(0, 5) + '/' + val.slice(5, 9);
                                                     setDisplayDate(val);
 
-                                                    // Update actual backend state when 10 chars are reached
+                                                    // Update DB date state when full DD/MM/YYYY is typed
                                                     if (val.length === 10) {
                                                         const [d, m, y] = val.split('/');
-                                                        setJourneyDate(`${y}-${m}-${d}`);
+                                                        const dbDate = `${y}-${m}-${d}`;
+                                                        setJourneyDate(dbDate);
                                                         classInputRef.current?.focus();
                                                     } else {
                                                         setJourneyDate('');
                                                     }
                                                 }}
                                                 required
-                                                className="input-field"
-                                                style={{ paddingRight: '40px', width: '100%' }}
+                                                className="input-field date-text-field"
                                             />
 
-                                            {/* Hidden native date picker activated by clicking the icon area */}
-                                            <input
-                                                type="date"
-                                                min={minDate}
-                                                max={maxDate}
-                                                onChange={(e) => {
-                                                    const selected = e.target.value; // Returns YYYY-MM-DD
-                                                    setJourneyDate(selected);
-                                                    if (selected) {
-                                                        const [y, m, d] = selected.split('-');
-                                                        setDisplayDate(`${d}/${m}/${y}`);
-                                                        classInputRef.current?.focus();
+                                            {/* Native Calendar Picker Overlay over Icon */}
+                                            <div
+                                                className="calendar-icon-btn"
+                                                title="Open Calendar"
+                                                onClick={() => {
+                                                    if (nativeDatePickerRef.current?.showPicker) {
+                                                        nativeDatePickerRef.current.showPicker();
+                                                    } else {
+                                                        nativeDatePickerRef.current?.focus();
                                                     }
                                                 }}
-                                                style={{
-                                                    position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
-                                                    opacity: 0, width: '30px', height: '30px', cursor: 'pointer', zIndex: 2
-                                                }}
-                                            />
-
-                                            {/* Permanent Calendar Icon */}
-                                            <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', zIndex: 1, fontSize: '18px' }}>
+                                            >
                                                 📅
-                                            </span>
+                                                <input
+                                                    type="date"
+                                                    ref={nativeDatePickerRef}
+                                                    min={minDate}
+                                                    max={maxDate}
+                                                    value={journeyDate}
+                                                    onChange={(e) => {
+                                                        const selectedDbDate = e.target.value; // YYYY-MM-DD
+                                                        setJourneyDate(selectedDbDate);
+                                                        if (selectedDbDate) {
+                                                            setDisplayDate(formatToDisplayDate(selectedDbDate));
+                                                            classInputRef.current?.focus();
+                                                        }
+                                                    }}
+                                                    className="native-date-hidden-input"
+                                                />
+                                            </div>
                                         </div>
                                     </div>
 
@@ -1135,6 +1460,7 @@ export function App() {
                         </div>
                     </div>
                 )}
+
                 {/* ================= RESULTS PAGE ================= */}
                 {view === 'results' && (
                     <div>
@@ -1146,7 +1472,7 @@ export function App() {
                                 <span style={{ fontSize: '22px', color: 'var(--rail-green-dark)' }}>🚂</span>
                                 <div>
                                     <div style={{ fontWeight: 'bold', color: '#2c3e50', fontSize: '16px' }}>{fromStationName} - {toStationName}</div>
-                                    <div style={{ fontSize: '13px', color: '#666', marginTop: '2px' }}>{journeyDate}</div>
+                                    <div style={{ fontSize: '13px', color: '#666', marginTop: '2px' }}>{formatToDisplayDate(journeyDate)}</div>
                                 </div>
                             </div>
                             <button className="btn btn-amber" style={{ padding: '8px 18px', fontSize: '12px' }} onClick={() => setView('home')}>MODIFY SEARCH</button>
@@ -1186,6 +1512,7 @@ export function App() {
                                                             const firstCoach = trainClasses[cls][0];
                                                             setSelectedCoach(firstCoach);
                                                             fetchCoachSeats(train.train_id, firstCoach, journeyDate);
+                                                            fetchCoachSummary(train.train_id, journeyDate);
                                                         }} style={{
                                                             border: isSelectedClass ? '2px solid var(--rail-green)' : '1px solid #cbd5e1',
                                                             borderRadius: '6px', padding: '15px', width: '160px',
@@ -1194,7 +1521,7 @@ export function App() {
                                                         }}>
                                                             <div style={{ fontWeight: 'bold', color: '#4a5568', fontSize: '14px' }}>{cls}</div>
                                                             <div style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--rail-green)', margin: '6px 0' }}>
-                                                                ৳{(train.fares && train.fares[cls]) ? train.fares[cls] : 'N/A'}
+                                                                ৳ {(train.fares && train.fares[cls]) ? train.fares[cls] : 'N/A'}
                                                             </div>
                                                             <button className={isSelectedClass ? 'btn btn-primary' : ''} style={{
                                                                 marginTop: 'auto', padding: '8px',
@@ -1214,6 +1541,7 @@ export function App() {
 
                                                     <div style={{ backgroundColor: '#f8fafc', padding: '25px', borderRadius: '12px', border: '1px solid #e2e8f0', width: 'fit-content' }}>
 
+                                                        {/* Real-time Dynamic Compartment Seat Count (Requirement 3) */}
                                                         <div style={{ marginBottom: '20px' }}>
                                                             <label style={{ fontSize: '14px', fontWeight: 'bold', color: '#2c3e50', display: 'block', marginBottom: '8px' }}>Select Coach</label>
                                                             <select
@@ -1225,11 +1553,18 @@ export function App() {
                                                                     setSelectedCoach(newCoach);
                                                                     setSelectedSeats([]);
                                                                     fetchCoachSeats(train.train_id, newCoach, journeyDate);
+                                                                    fetchCoachSummary(train.train_id, journeyDate);
                                                                 }}
                                                             >
-                                                                {trainClasses[seatClass].map(coach => (
-                                                                    <option key={coach} value={coach}>{coach} - {getSeatCount(coach)} Seat(s)</option>
-                                                                ))}
+                                                                {trainClasses[seatClass].map(coach => {
+                                                                    const availInfo = coachSummary[coach];
+                                                                    const availCount = availInfo ? availInfo.available : getSeatCount(coach);
+                                                                    return (
+                                                                        <option key={coach} value={coach}>
+                                                                            {coach} ({availCount} Seats)
+                                                                        </option>
+                                                                    );
+                                                                })}
                                                             </select>
                                                         </div>
 
@@ -1241,7 +1576,7 @@ export function App() {
                                                                 <div className="seat selected" style={{ width: '18px', height: '18px', borderRadius: '4px' }}></div>Selected
                                                             </div>
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
-                                                                <div className="seat booked" style={{ width: '18px', height: '18px', borderRadius: '4px' }}></div>Booked
+                                                                <div className="seat booked" style={{ width: '18px', height: '18px', borderRadius: '4px' }}></div>Booked / Reserved
                                                             </div>
                                                         </div>
 
@@ -1263,11 +1598,13 @@ export function App() {
                                                                             const fullSeatName = `${dbSeat.coach_name}-${dbSeat.seat_number}`;
                                                                             const isSelected = selectedSeats.some(s => s.id === dbSeat.seat_id);
                                                                             const isBooked = dbSeat.is_booked === 1 || dbSeat.is_booked === true;
+                                                                            const isPendingLock = dbSeat.is_pending === 1 || dbSeat.is_pending === true;
+
                                                                             return (
                                                                                 <div
                                                                                     key={dbSeat.seat_id}
                                                                                     onClick={() => handleSeatSelect(dbSeat.seat_id, fullSeatName, isBooked)}
-                                                                                    className={`seat ${isBooked ? 'booked' : isSelected ? 'selected' : 'available'}`}
+                                                                                    className={`seat ${isBooked ? 'booked' : isPendingLock ? 'pending' : isSelected ? 'selected' : 'available'}`}
                                                                                     style={{ width: '100%', height: '40px', fontSize: '12px', padding: '0 10px' }}
                                                                                 >
                                                                                     {fullSeatName}
@@ -1285,19 +1622,21 @@ export function App() {
 
                                                         {selectedSeats.length > 0 && (
                                                             <div style={{ marginBottom: '20px', fontSize: '14px', color: '#4a5568' }}>
-                                                                <strong>Selected Seats:</strong> {selectedSeats.map(s => s.name).join(', ')}
+                                                                <strong>Selected Seats ({selectedSeats.length}/4 max):</strong> {selectedSeats.map(s => s.name).join(', ')}
                                                             </div>
                                                         )}
 
+                                                        {/* Bangladeshi Taka Symbol ৳ */}
                                                         <div style={{
                                                             backgroundColor: 'var(--rail-green-light)', padding: '15px', borderRadius: '4px', textAlign: 'center',
                                                             fontWeight: 'bold', fontSize: '18px', color: 'var(--rail-green)', border: '1px solid var(--line)', marginBottom: '20px'
                                                         }}>
-                                                            Total: ৳ {selectedSeats.length > 0 ? (((train.fares && train.fares[seatClass]) ? train.fares[seatClass] : 0) * selectedSeats.length) : 0}
+                                                            Total: ৳ {selectedSeats.length > 0 ? (((train.fares && train.fares[seatClass]) ? train.fares[seatClass] : 0) * selectedSeats.length).toFixed(2) : '0.00'}
                                                         </div>
 
+                                                        {/* Step 1: Proceed to Payment & Lock Seats for 4 minutes */}
                                                         <button
-                                                            onClick={() => handleCheckout(train.train_id)}
+                                                            onClick={() => handleProceedToPayment(train.train_id)}
                                                             disabled={selectedSeats.length === 0 || checkoutLoading}
                                                             className="btn"
                                                             style={{
@@ -1305,7 +1644,7 @@ export function App() {
                                                                 background: selectedSeats.length > 0 ? 'var(--rail-green)' : '#cbd5e1'
                                                             }}
                                                         >
-                                                            {checkoutLoading ? <Spinner /> : 'CONTINUE PURCHASE & PAY'}
+                                                            {checkoutLoading ? <Spinner /> : 'PROCEED TO PAYMENT (LOCK 4 MIN)'}
                                                         </button>
                                                     </div>
                                                 </div>

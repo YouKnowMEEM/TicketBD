@@ -39,6 +39,103 @@ async function finalizeExpiredRefunds(connection, username) {
     `, [username]);
 }
 
+// Helper: clean up expired seat locks (older than 4 minutes)
+async function cleanupExpiredLocks(connection) {
+    await connection.query(`
+        DELETE FROM Booking
+        WHERE status = 'PENDING'
+          AND (locked_until < NOW() OR (locked_until IS NULL AND booking_time < DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+    `);
+}
+
+// Helper: Check active seat limit for user across overlapping journeys (Max 4 active seats)
+async function validateActiveSeatLimit(connection, userId, trainId, startStationId, endStationId, journeyDate, requestedSeatCount) {
+    // 1. Fetch departure & arrival times of the new requested journey
+    const [newJourneyTimes] = await connection.query(`
+        SELECT s1.departure_time, s2.arrival_time
+        FROM Stoppage s1 
+        JOIN Stoppage s2 ON s1.train_id = s2.train_id
+        WHERE s1.train_id = ? AND s1.station_id = ? AND s2.station_id = ?
+    `, [trainId, startStationId, endStationId]);
+
+    if (newJourneyTimes.length === 0) {
+        throw new Error("Invalid route or stoppage not found.");
+    }
+
+    const newDepTimeStr = newJourneyTimes[0].departure_time;
+    const newArrTimeStr = newJourneyTimes[0].arrival_time;
+
+    // Convert journey date + time strings to JavaScript Date objects
+    let journeyDateFormatted = journeyDate;
+    if (journeyDate instanceof Date) {
+        const y = journeyDate.getFullYear();
+        const m = String(journeyDate.getMonth() + 1).padStart(2, '0');
+        const d = String(journeyDate.getDate()).padStart(2, '0');
+        journeyDateFormatted = `${y}-${m}-${d}`;
+    } else {
+        journeyDateFormatted = String(journeyDate).split('T')[0];
+    }
+
+    const newDepDateTime = new Date(`${journeyDateFormatted}T${newDepTimeStr}`);
+    let newArrDateTime = new Date(`${journeyDateFormatted}T${newArrTimeStr}`);
+
+    // Handle overnight journey crossing midnight
+    if (newArrDateTime <= newDepDateTime) {
+        newArrDateTime.setDate(newArrDateTime.getDate() + 1);
+    }
+
+    // 2. Fetch all active bookings of the user whose arrival time is in the future
+    const [activeBookings] = await connection.query(`
+        SELECT 
+            b.booking_id, b.journey_date, b.train_id,
+            t.status AS ticket_status,
+            s1.departure_time, s2.arrival_time
+        FROM Booking b
+        LEFT JOIN Ticket t ON b.booking_id = t.booking_id
+        JOIN Stoppage s1 ON b.train_id = s1.train_id AND b.start_station_id = s1.station_id
+        JOIN Stoppage s2 ON b.train_id = s2.train_id AND b.end_station_id = s2.station_id
+        WHERE b.user_id = ?
+          AND (
+            (b.status = 'CONFIRMED' AND (t.status IS NULL OR t.status = 'ACTIVE'))
+            OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))))
+          )
+    `, [userId]);
+
+    let overlappingActiveCount = 0;
+    const now = new Date();
+
+    for (const bk of activeBookings) {
+        let bkDateStr = bk.journey_date;
+        if (bk.journey_date instanceof Date) {
+            const y = bk.journey_date.getFullYear();
+            const m = String(bk.journey_date.getMonth() + 1).padStart(2, '0');
+            const d = String(bk.journey_date.getDate()).padStart(2, '0');
+            bkDateStr = `${y}-${m}-${d}`;
+        } else {
+            bkDateStr = String(bk.journey_date).split('T')[0];
+        }
+
+        const bkDepDateTime = new Date(`${bkDateStr}T${bk.departure_time}`);
+        let bkArrDateTime = new Date(`${bkDateStr}T${bk.arrival_time}`);
+        if (bkArrDateTime <= bkDepDateTime) {
+            bkArrDateTime.setDate(bkArrDateTime.getDate() + 1);
+        }
+
+        // Only count active bookings whose journey has not ended yet
+        if (bkArrDateTime > now) {
+            // Check for time overlap between existing booking and new journey
+            const isOverlapping = (bkDepDateTime < newArrDateTime && bkArrDateTime > newDepDateTime);
+            if (isOverlapping) {
+                overlappingActiveCount++;
+            }
+        }
+    }
+
+    if (overlappingActiveCount + requestedSeatCount > 4) {
+        throw new Error("You already have 4 active seats for an ongoing journey. You cannot book another overlapping journey until your previous trip ends or some seats are cancelled.");
+    }
+}
+
 // ==========================================
 // 🚀 API ROUTE: SIGNUP & SEND VERIFICATION EMAIL (BREVO HTTP API)
 // ==========================================
@@ -278,29 +375,93 @@ app.get('/api/trains', async (req, res) => {
 });
 
 // ==========================================
+// 📊 API ROUTE: DYNAMIC COACH SUMMARY (REAL-TIME SEAT AVAILABILITY)
+// ==========================================
+app.get('/api/coach-summary', async (req, res) => {
+    const { trainId, journeyDate } = req.query;
+
+    if (!trainId || !journeyDate) {
+        return res.status(400).json({ success: false, message: "trainId and journeyDate are required." });
+    }
+
+    try {
+        const connection = await pool.getConnection();
+        await cleanupExpiredLocks(connection);
+
+        const query = `
+            SELECT 
+                s.coach_name,
+                s.class,
+                COUNT(s.seat_id) AS total_seats,
+                SUM(CASE 
+                    WHEN b.seat_id IS NOT NULL 
+                         AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))))
+                    THEN 1 ELSE 0 
+                END) AS booked_seats
+            FROM Seat s
+            LEFT JOIN Booking b ON s.seat_id = b.seat_id 
+                AND b.journey_date = ? 
+                AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))))
+            WHERE s.train_id = ?
+            GROUP BY s.coach_name, s.class
+        `;
+        const [rows] = await connection.query(query, [journeyDate, trainId]);
+        connection.release();
+
+        const summary = {};
+        rows.forEach(r => {
+            const total = Number(r.total_seats) || 0;
+            const booked = Number(r.booked_seats) || 0;
+            const available = Math.max(0, total - booked);
+            summary[r.coach_name] = { total, booked, available };
+        });
+
+        res.json({ success: true, summary });
+    } catch (error) {
+        console.error("Error fetching coach summary:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch coach summary" });
+    }
+});
+
+// ==========================================
 // 💺 API ROUTE: FETCH COACH SEATS & AVAILABILITY (public)
 // ==========================================
 app.get('/api/seats', async (req, res) => {
     const { trainId, coachName, journeyDate } = req.query;
 
     try {
-        // 👇 FIX: Added the proper locked_until check so expired seats become available again
+        const connection = await pool.getConnection();
+        await cleanupExpiredLocks(connection);
+
         const query = `
             SELECT
                 s.seat_id,
                 s.coach_name,
                 s.seat_number,
+                s.class,
                 s.price,
-                CASE WHEN b.seat_id IS NOT NULL THEN 1 ELSE 0 END AS is_booked
+                CASE 
+                    WHEN b.seat_id IS NOT NULL 
+                         AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))))
+                    THEN 1 ELSE 0 
+                END AS is_booked,
+                CASE 
+                    WHEN b.seat_id IS NOT NULL 
+                         AND b.status = 'PENDING' 
+                         AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))
+                    THEN 1 ELSE 0 
+                END AS is_pending
             FROM Seat s
-                     LEFT JOIN Booking b
-                               ON s.seat_id = b.seat_id
-                                   AND b.journey_date = ?
-                                   AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND b.locked_until > NOW()))
+            LEFT JOIN Booking b
+                   ON s.seat_id = b.seat_id
+                       AND b.journey_date = ?
+                       AND (b.status = 'CONFIRMED' OR (b.status = 'PENDING' AND (b.locked_until > NOW() OR (b.locked_until IS NULL AND b.booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE)))))
             WHERE s.train_id = ?
               AND s.coach_name = ?
         `;
-        const [seats] = await pool.query(query, [journeyDate, trainId, coachName]);
+        const [seats] = await connection.query(query, [journeyDate, trainId, coachName]);
+        connection.release();
+
         res.json({ success: true, seats });
     } catch (error) {
         console.error("Error fetching seats:", error);
@@ -318,82 +479,52 @@ app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), asyn
         return res.status(400).json({ success: false, message: "No seats selected." });
     }
 
+    if (selectedSeats.length > 4) {
+        return res.status(400).json({ success: false, message: "You can book at most 4 seats per booking." });
+    }
+
     const connection = await pool.getConnection();
 
     try {
         await connection.beginTransaction();
 
-        // 🧹 Clean up any expired locks before we check availability
-        await connection.query(`
-            DELETE FROM Booking 
-            WHERE status = 'PENDING' AND locked_until < NOW()
-        `);
+        // 🧹 Clean up any expired locks before checking availability
+        await cleanupExpiredLocks(connection);
 
-        // ---------------------------------------------------------
-        // 🛑 VALIDATION 1: Maximum 4 seats per train per day
-        // ---------------------------------------------------------
-        const [existingSeatsOnTrain] = await connection.query(`
-            SELECT COUNT(*) as count FROM Booking
-            WHERE user_id = ? AND train_id = ? AND journey_date = ? AND status IN ('CONFIRMED', 'PENDING')
-        `, [userId, trainId, journeyDate]);
+        // 🛑 VALIDATION: Maximum 4 active seats rule across overlapping journeys
+        await validateActiveSeatLimit(
+            connection, userId, trainId, startStationId, endStationId, journeyDate, selectedSeats.length
+        );
 
-        const alreadyBookedCount = existingSeatsOnTrain[0].count;
-        if (alreadyBookedCount + selectedSeats.length > 4) {
-            throw new Error(`Maximum 4 seats allowed. You already have ${alreadyBookedCount} seats booked or locked on this journey.`);
-        }
-
-        // ---------------------------------------------------------
-        // 🛑 VALIDATION 2: The Teleportation / Overlap Block
-        // ---------------------------------------------------------
-        const [newJourneyTimes] = await connection.query(`
-            SELECT s1.departure_time, s2.arrival_time
-            FROM Stoppage s1 JOIN Stoppage s2 ON s1.train_id = s2.train_id
-            WHERE s1.train_id = ? AND s1.station_id = ? AND s2.station_id = ?
-        `, [trainId, startStationId, endStationId]);
-
-        if (newJourneyTimes.length === 0) throw new Error("Invalid route.");
-        const newDepTime = newJourneyTimes[0].departure_time;
-        const newArrTime = newJourneyTimes[0].arrival_time;
-
-        const [overlappingBookings] = await connection.query(`
-            SELECT b.booking_id, t.train_name, s1.departure_time, s2.arrival_time
-            FROM Booking b
-            JOIN Train t ON b.train_id = t.train_id
-            JOIN Stoppage s1 ON b.train_id = s1.train_id AND b.start_station_id = s1.station_id
-            JOIN Stoppage s2 ON b.train_id = s2.train_id AND b.end_station_id = s2.station_id
-            WHERE b.user_id = ? AND b.journey_date = ? AND b.status IN ('CONFIRMED', 'PENDING')
-              AND b.train_id != ? AND (s1.departure_time < ? AND s2.arrival_time > ?)
-        `, [userId, journeyDate, trainId, newArrTime, newDepTime]);
-
-        if (overlappingBookings.length > 0) {
-            const conflict = overlappingBookings[0];
-            throw new Error(`Conflict detected with your journey on ${conflict.train_name}.`);
-        }
-
-        // ---------------------------------------------------------
-        // 🔒 LOCKING THE SEATS
-        // ---------------------------------------------------------
+        // 🔒 LOCKING THE SEATS WITH DBMS TRANSACTION LOCKS
         const lockedBookingIds = [];
 
         for (const requestedSeat of selectedSeats) {
-            // The DBMS FOR UPDATE lock prevents race conditions right here
+            // FOR UPDATE row lock to avoid race conditions
             const [seatRows] = await connection.query(
                 `SELECT seat_id, price FROM Seat WHERE seat_id = ? FOR UPDATE`,
                 [requestedSeat.seat_id]
             );
 
-            if (seatRows.length === 0) throw new Error(`Seat ${requestedSeat.seat_id} does not exist.`);
-
-            const [alreadyBooked] = await connection.query(
-                `SELECT booking_id FROM Booking WHERE seat_id = ? AND journey_date = ? AND status IN ('CONFIRMED', 'PENDING')`,
-                [requestedSeat.seat_id, journeyDate]
-            );
-
-            if (alreadyBooked.length > 0) {
-                throw new Error(`Another passenger just locked or booked seat ${requestedSeat.seat_id}.`);
+            if (seatRows.length === 0) {
+                throw new Error(`Seat ID ${requestedSeat.seat_id} does not exist.`);
             }
 
-            // Insert as PENDING with a 4-minute expiration
+            // Check if seat is currently booked or locked by another active booking
+            const [alreadyBooked] = await connection.query(`
+                SELECT booking_id FROM Booking 
+                WHERE seat_id = ? AND journey_date = ? 
+                  AND (
+                    status = 'CONFIRMED' 
+                    OR (status = 'PENDING' AND (locked_until > NOW() OR (locked_until IS NULL AND booking_time > DATE_SUB(NOW(), INTERVAL 4 MINUTE))))
+                  )
+            `, [requestedSeat.seat_id, journeyDate]);
+
+            if (alreadyBooked.length > 0) {
+                throw new Error(`Another passenger just reserved or locked seat ID ${requestedSeat.seat_id}. Please select a different seat.`);
+            }
+
+            // Insert seat lock record as PENDING with 4-minute expiration
             const [bookingResult] = await connection.query(`
                 INSERT INTO Booking (user_id, train_id, start_station_id, end_station_id, seat_id, journey_date, status, locked_until)
                 VALUES (?, ?, ?, ?, ?, ?, 'PENDING', DATE_ADD(NOW(), INTERVAL 4 MINUTE))
@@ -403,7 +534,14 @@ app.post('/api/lock-seats', authenticateToken, authorizeSelfBody('userId'), asyn
         }
 
         await connection.commit();
-        res.json({ success: true, message: "Seats locked for 4 minutes.", bookingIds: lockedBookingIds });
+        const expiresAt = new Date(Date.now() + 4 * 60 * 1000).toISOString();
+
+        res.json({
+            success: true,
+            message: "Seats locked for 4 minutes.",
+            bookingIds: lockedBookingIds,
+            expiresAt
+        });
     } catch (error) {
         await connection.rollback();
         console.error("Locking Error:", error);
@@ -431,9 +569,9 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
         const generatedTickets = [];
 
         for (const bookingId of bookingIds) {
-            // Verify the lock still exists and belongs to the user
+            // Verify the lock still exists, belongs to user, and has not expired
             const [bookings] = await connection.query(`
-                SELECT b.booking_id, b.seat_id, b.journey_date, b.start_station_id, b.end_station_id, s.price, b.locked_until
+                SELECT b.booking_id, b.seat_id, b.journey_date, b.start_station_id, b.end_station_id, s.price, b.locked_until, b.booking_time
                 FROM Booking b
                 JOIN Seat s ON b.seat_id = s.seat_id
                 WHERE b.booking_id = ? AND b.user_id = ? AND b.status = 'PENDING'
@@ -446,8 +584,15 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
 
             const booking = bookings[0];
 
-            // Double check if the 4 minutes have passed
-            if (new Date(booking.locked_until).getTime() < Date.now()) {
+            // Double check lock expiration (4 minutes)
+            let expiryTime;
+            if (booking.locked_until) {
+                expiryTime = new Date(booking.locked_until).getTime();
+            } else {
+                expiryTime = new Date(booking.booking_time).getTime() + 4 * 60 * 1000;
+            }
+
+            if (expiryTime < Date.now()) {
                 throw new Error("Your 4-minute window to complete the payment has expired.");
             }
 
@@ -458,19 +603,19 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
             `, [booking.booking_id, userId, booking.journey_date, booking.price]);
             const newTicketId = ticketResult.insertId;
 
-            // Generate Payment
+            // Generate Payment record
             const transactionId = `TXN-${Date.now()}-${crypto.randomUUID().split('-')[0]}`;
             await connection.query(`
                 INSERT INTO Payment (transaction_id, ticket_id, amount, payment_method)
                 VALUES (?, ?, ?, ?)
-            `, [transactionId, newTicketId, booking.price, paymentMethod]);
+            `, [transactionId, newTicketId, booking.price, paymentMethod || 'bKash']);
 
             // Update Booking status to CONFIRMED
             await connection.query(`
                 UPDATE Booking SET status = 'CONFIRMED', locked_until = NULL WHERE booking_id = ?
             `, [booking.booking_id]);
 
-            // Check for pending refunds to settle (Resale Logic)
+            // Check for pending resale refunds to settle
             const [pendingRefund] = await connection.query(`
                 SELECT rr.refund_request_id, t.price_paid AS original_price
                 FROM RefundRequest rr
@@ -499,7 +644,7 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
         }
 
         await connection.commit();
-        res.json({ success: true, message: "Tickets generated successfully!", ticketIds: generatedTickets });
+        res.json({ success: true, message: "Payment successful! Your tickets have been confirmed.", ticketIds: generatedTickets });
     } catch (error) {
         await connection.rollback();
         console.error("🛑 Checkout Error:", error);
@@ -510,7 +655,7 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
 });
 
 // ==========================================
-// 🎟️ API ROUTE: FETCH USER TICKETS - 15-DAY HISTORY (auth required, self only)
+// 🎟️ API ROUTE: FETCH USER TICKETS - 15-DAY HISTORY (ORDERED NEWEST FIRST)
 // ==========================================
 app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async (req, res) => {
     const { userId } = req.params;
@@ -519,12 +664,21 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
     try {
         await finalizeExpiredRefunds(connection, userId);
 
+        // Sort by payment_time / booking datetime DESC (Requirement 9)
         const query = `
             SELECT
-                t.ticket_id, DATE_FORMAT(t.journey_date, '%Y-%m-%d') as journey_date, t.price_paid, t.status AS ticket_status,
-                tr.train_name, tr.train_number,
-                s.seat_number, s.coach_name,
-                p.transaction_id, p.payment_time AS payment_date,
+                t.ticket_id, 
+                DATE_FORMAT(t.journey_date, '%Y-%m-%d') as journey_date, 
+                t.price_paid, 
+                t.status AS ticket_status,
+                tr.train_name, 
+                tr.train_number,
+                s.seat_number, 
+                s.coach_name,
+                s.class,
+                p.transaction_id, 
+                p.payment_time AS payment_date,
+                b.booking_time,
                 (SELECT station_name FROM Station WHERE station_id = b.start_station_id) AS start_station,
                 (SELECT station_name FROM Station WHERE station_id = b.end_station_id) AS end_station,
                 rr.status AS refund_status,
@@ -537,7 +691,7 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
                      JOIN Payment p ON t.ticket_id = p.ticket_id
                      LEFT JOIN RefundRequest rr ON t.ticket_id = rr.ticket_id
             WHERE t.user_id = ? AND t.journey_date >= DATE_SUB(CURDATE(), INTERVAL 15 DAY)
-            ORDER BY t.journey_date DESC, t.issue_time DESC
+            ORDER BY p.payment_time DESC, t.issue_time DESC, t.ticket_id DESC
         `;
         const [tickets] = await connection.query(query, [userId]);
         res.json({ success: true, tickets });
@@ -550,85 +704,121 @@ app.get('/api/my-tickets/:userId', authenticateToken, authorizeSelfParam, async 
 });
 
 // ==========================================
-// 🚫 API ROUTE: CANCEL TICKET & CALCULATE REFUND (auth required, self only)
+// 🚫 API ROUTE: PARTIAL / FULL TICKET CANCELLATION & ৳20 SERVICE FEE DEDUCTION
 // ==========================================
 app.post('/api/cancel-ticket', authenticateToken, authorizeSelfBody('studentId'), async (req, res) => {
-    const { ticketId, studentId } = req.body;
+    // Supports single ticketId or array of ticketIds for partial cancellation (Requirement 7)
+    const { ticketId, ticketIds, studentId } = req.body;
+
+    let targetTicketIds = [];
+    if (Array.isArray(ticketIds) && ticketIds.length > 0) {
+        targetTicketIds = ticketIds;
+    } else if (ticketId) {
+        targetTicketIds = [ticketId];
+    } else {
+        return res.status(400).json({ success: false, message: "No ticket IDs provided for cancellation." });
+    }
+
     const connection = await pool.getConnection();
 
     try {
         await connection.beginTransaction();
 
-        const [ticketInfo] = await connection.query(
-            `SELECT t.price_paid, t.journey_date, b.booking_id, b.train_id, b.start_station_id
-             FROM Ticket t
-                      JOIN Booking b ON t.booking_id = b.booking_id
-             WHERE t.ticket_id = ? AND t.user_id = ? AND t.status = 'ACTIVE'`,
-            [ticketId, studentId]
-        );
+        let totalOriginalFare = 0;
+        let totalServiceFee = 0;
+        let totalEstimatedRefund = 0;
+        let cancelledCount = 0;
 
-        if (ticketInfo.length === 0) {
-            throw new Error("Active ticket not found.");
+        for (const tId of targetTicketIds) {
+            const [ticketInfo] = await connection.query(
+                `SELECT t.ticket_id, t.price_paid, t.journey_date, b.booking_id, b.train_id, b.start_station_id, s.seat_number, s.coach_name
+                 FROM Ticket t
+                 JOIN Booking b ON t.booking_id = b.booking_id
+                 JOIN Seat s ON b.seat_id = s.seat_id
+                 WHERE t.ticket_id = ? AND t.user_id = ? AND t.status = 'ACTIVE' FOR UPDATE`,
+                [tId, studentId]
+            );
+
+            if (ticketInfo.length === 0) {
+                continue; // Skip if already cancelled or invalid
+            }
+            const ticket = ticketInfo[0];
+
+            const [stoppage] = await connection.query(
+                'SELECT departure_time FROM Stoppage WHERE train_id = ? AND station_id = ?',
+                [ticket.train_id, ticket.start_station_id]
+            );
+            const depTime = stoppage.length > 0 && stoppage[0].departure_time ? stoppage[0].departure_time : '06:00:00';
+
+            let formattedDate;
+            if (ticket.journey_date instanceof Date) {
+                const y = ticket.journey_date.getFullYear();
+                const m = String(ticket.journey_date.getMonth() + 1).padStart(2, '0');
+                const d = String(ticket.journey_date.getDate()).padStart(2, '0');
+                formattedDate = `${y}-${m}-${d}`;
+            } else {
+                formattedDate = String(ticket.journey_date).split('T')[0];
+            }
+
+            const journeyDateTime = new Date(`${formattedDate}T${depTime}`).getTime();
+            const currentTime = Date.now();
+            const hoursLeft = (journeyDateTime - currentTime) / (1000 * 60 * 60);
+
+            if (hoursLeft <= 0) {
+                throw new Error(`Cannot cancel seat ${ticket.coach_name}-${ticket.seat_number}. Train departure time has already passed.`);
+            }
+
+            if (hoursLeft < 6) {
+                throw new Error(`Cannot cancel seat ${ticket.coach_name}-${ticket.seat_number}. Cancellations are not allowed within 6 hours of departure.`);
+            }
+
+            // Deduct ৳20 service fee per cancelled seat (Requirement 8)
+            const serviceFee = 20.00;
+            const seatFare = parseFloat(ticket.price_paid);
+            const baseFareAfterServiceFee = Math.max(0, seatFare - serviceFee);
+
+            // Calculate time-based cancellation penalty
+            let deductionRate = 0.10;
+            if (hoursLeft <= 12) {
+                deductionRate = 0.75;
+            } else if (hoursLeft <= 24) {
+                deductionRate = 0.50;
+            } else if (hoursLeft <= 48) {
+                deductionRate = 0.25;
+            }
+
+            const timeDeduction = Math.max(40.00, baseFareAfterServiceFee * deductionRate);
+            const potentialRefund = Math.max(0, baseFareAfterServiceFee - timeDeduction);
+
+            totalOriginalFare += seatFare;
+            totalServiceFee += serviceFee;
+            totalEstimatedRefund += potentialRefund;
+            cancelledCount++;
+
+            // Cancel Ticket & Booking (immediately releases seat for re-booking)
+            await connection.query(`UPDATE Ticket SET status = 'CANCELLED' WHERE ticket_id = ?`, [tId]);
+            await connection.query(`UPDATE Booking SET status = 'CANCELLED' WHERE booking_id = ?`, [ticket.booking_id]);
+
+            // Store in RefundRequest with ৳20 fee recorded
+            await connection.query(
+                `INSERT INTO RefundRequest (ticket_id, original_user_id, time_before_journey_hours, potential_partial_refund, status)
+                 VALUES (?, ?, ?, ?, 'PENDING_RESALE')`,
+                [tId, studentId, Math.floor(hoursLeft), potentialRefund]
+            );
         }
-        const ticket = ticketInfo[0];
 
-        const [stoppage] = await connection.query(
-            'SELECT departure_time FROM Stoppage WHERE train_id = ? AND station_id = ?',
-            [ticket.train_id, ticket.start_station_id]
-        );
-        const depTime = stoppage.length > 0 && stoppage[0].departure_time ? stoppage[0].departure_time : '06:00:00';
-
-        let formattedDate;
-        if (ticket.journey_date instanceof Date) {
-            const y = ticket.journey_date.getFullYear();
-            const m = String(ticket.journey_date.getMonth() + 1).padStart(2, '0');
-            const d = String(ticket.journey_date.getDate()).padStart(2, '0');
-            formattedDate = `${y}-${m}-${d}`;
-        } else {
-            formattedDate = String(ticket.journey_date).split('T')[0];
+        if (cancelledCount === 0) {
+            throw new Error("No active seats were found for cancellation.");
         }
-
-        const journeyDateTime = new Date(`${formattedDate}T${depTime}+06:00`).getTime();
-        const currentTime = new Date().getTime();
-        const hoursLeft = (journeyDateTime - currentTime) / (1000 * 60 * 60);
-
-        if (hoursLeft <= 0) {
-            throw new Error("Cannot cancel ticket. The train has already departed or the journey date/time has passed.");
-        }
-
-        if (hoursLeft < 6) {
-            throw new Error("Tickets cannot be cancelled less than 6 hours before departure.");
-        }
-
-        const serviceCharge = 20.00;
-        const baseFare = parseFloat(ticket.price_paid) - serviceCharge;
-        let deduction;
-
-        if (hoursLeft > 48) {
-            deduction = Math.max(40, baseFare * 0.10);
-        } else if (hoursLeft > 24) {
-            deduction = Math.max(40, baseFare * 0.25);
-        } else if (hoursLeft > 12) {
-            deduction = Math.max(40, baseFare * 0.50);
-        } else {
-            deduction = Math.max(40, baseFare * 0.75);
-        }
-
-        const potentialRefund = Math.max(0, baseFare - deduction);
-
-        await connection.query(`UPDATE Ticket SET status = 'CANCELLED' WHERE ticket_id = ?`, [ticketId]);
-        await connection.query(`UPDATE Booking SET status = 'CANCELLED' WHERE booking_id = ?`, [ticket.booking_id]);
-
-        await connection.query(
-            `INSERT INTO RefundRequest (ticket_id, original_user_id, time_before_journey_hours, potential_partial_refund, status)
-             VALUES (?, ?, ?, ?, 'PENDING_RESALE')`,
-            [ticketId, studentId, Math.floor(hoursLeft), potentialRefund]
-        );
 
         await connection.commit();
         res.json({
             success: true,
-            message: `Ticket cancelled. If your seat is bought by another passenger, you'll get a full refund. Otherwise, your estimated refund after the journey date is ৳${potentialRefund.toFixed(2)}.`
+            message: `Successfully cancelled ${cancelledCount} seat(s). Service fee of ৳ ${totalServiceFee.toFixed(2)} deducted (৳ 20/seat). Estimated refund after journey: ৳ ${totalEstimatedRefund.toFixed(2)}.`,
+            cancelledCount,
+            totalOriginalFare,
+            totalServiceFee,
+            totalEstimatedRefund
         });
     } catch (error) {
         await connection.rollback();

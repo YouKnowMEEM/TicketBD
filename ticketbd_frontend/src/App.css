@@ -69,16 +69,58 @@ button {
     cursor: not-allowed;
 }
 
-/* ============ Date Input Calendar Icon Fix ============ */
+/* ============ Date Input & Visible Calendar Icon Fix ============ */
+.date-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+.date-text-field {
+    padding-right: 44px !important; /* Enough right padding so text never overlaps calendar icon */
+    width: 100%;
+}
+
+.calendar-icon-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 18px;
+    cursor: pointer;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    transition: background-color 0.15s ease, transform 0.1s ease;
+}
+
+.calendar-icon-btn:hover {
+    background-color: var(--rail-green-light);
+}
+
+.native-date-hidden-input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+    z-index: 6;
+}
+
 .input-field[type="date"]::-webkit-calendar-picker-indicator {
     cursor: pointer;
-    opacity: 0.6;
+    opacity: 0.8;
     transition: opacity 0.15s ease, filter 0.15s ease;
 }
 
 .input-field[type="date"]::-webkit-calendar-picker-indicator:hover {
     opacity: 1;
-    /* Tints the default calendar icon to match your rail-green theme */
     filter: invert(29%) sepia(85%) saturate(464%) hue-rotate(113deg) brightness(92%) contrast(93%);
 }
 
@@ -267,6 +309,15 @@ button {
     color: #3a2b04;
     cursor: not-allowed;
     opacity: 0.75;
+}
+
+.seat.pending {
+    background-color: #2563eb;
+    border: 2px solid #1d4ed8;
+    color: white;
+    cursor: not-allowed;
+    opacity: 0.85;
+    box-shadow: 0 2px 6px rgba(37,99,235,0.3);
 }
 
 .seat.empty-space {
