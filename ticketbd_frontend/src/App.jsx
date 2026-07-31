@@ -108,7 +108,8 @@ export function App() {
     const [fromStationName, setFromStationName] = useState('');
     const [toStationName, setToStationName] = useState('');
     const [journeyDate, setJourneyDate] = useState('');
-    const [seatClass, setSeatClass] = useState('Snigdha');
+    const [displayDate, setDisplayDate] = useState('');
+    const [seatClass, setSeatClass] = useState('');
     const [trains, setTrains] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
 
@@ -1014,10 +1015,6 @@ export function App() {
                 {/* ================= HOME PAGE ================= */}
                 {view === 'home' && (
                     <div>
-                        <datalist id="stations">
-                            {stationList.map(station => (<option key={station.id} value={station.name} />))}
-                        </datalist>
-
                         <div className="card" style={{ maxWidth: '700px', margin: '50px auto', padding: '30px' }}>
                             {!isLoggedIn && (
                                 <div style={{
@@ -1029,30 +1026,107 @@ export function App() {
                             )}
                             <form onSubmit={searchTrains}>
                                 <div style={{ gridTemplateColumns: '1fr 1fr', display: 'grid', gap: '20px', marginBottom: '25px' }}>
+
+                                    {/* 1. FROM STATION DROPDOWN */}
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>From</label>
-                                        <input type="text" list="stations" placeholder="Departure"
-                                               value={fromStationName} onChange={(e) => {
-                                            setFromStationName(e.target.value);
-                                            if (stationList.some(s => s.name.toLowerCase() === e.target.value.toLowerCase())) toInputRef.current?.focus();
-                                        }} required className="input-field" />
+                                        <select
+                                            value={fromStationName}
+                                            onChange={(e) => {
+                                                setFromStationName(e.target.value);
+                                                if (e.target.value) toInputRef.current?.focus();
+                                            }}
+                                            required
+                                            className="input-field"
+                                        >
+                                            <option value="" disabled>Select Departure</option>
+                                            {stationList.map(station => (
+                                                <option key={`from-${station.id}`} value={station.name}>{station.name}</option>
+                                            ))}
+                                        </select>
                                     </div>
+
+                                    {/* 2. TO STATION DROPDOWN */}
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>To</label>
-                                        <input type="text" list="stations" ref={toInputRef} placeholder="Destination"
-                                               value={toStationName} onChange={(e) => {
-                                            setToStationName(e.target.value);
-                                            if (stationList.some(s => s.name.toLowerCase() === e.target.value.toLowerCase())) dateInputRef.current?.focus();
-                                        }} required className="input-field" />
+                                        <select
+                                            ref={toInputRef}
+                                            value={toStationName}
+                                            onChange={(e) => {
+                                                setToStationName(e.target.value);
+                                                if (e.target.value) dateInputRef.current?.focus();
+                                            }}
+                                            required
+                                            className="input-field"
+                                        >
+                                            <option value="" disabled>Select Destination</option>
+                                            {stationList.map(station => (
+                                                <option key={`to-${station.id}`} value={station.name}>{station.name}</option>
+                                            ))}
+                                        </select>
                                     </div>
+
+                                    {/* 3. CUSTOM DATE INPUT (TYPABLE + CALENDAR ICON) */}
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                        <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>Date of Journey</label>
-                                        <input type="date" ref={dateInputRef} value={journeyDate} min={minDate}
-                                               max={maxDate} onChange={(e) => {
-                                            setJourneyDate(e.target.value);
-                                            if (e.target.value) classInputRef.current?.focus();
-                                        }} required className="input-field" />
+                                        <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>Date of Journey (DD/MM/YYYY)</label>
+                                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+
+                                            {/* Text input for strict DD/MM/YYYY typing */}
+                                            <input
+                                                type="text"
+                                                ref={dateInputRef}
+                                                placeholder="DD/MM/YYYY"
+                                                value={displayDate}
+                                                maxLength={10}
+                                                onChange={(e) => {
+                                                    // Auto-format typing to DD/MM/YYYY
+                                                    let val = e.target.value.replace(/\D/g, '');
+                                                    if (val.length > 2) val = val.slice(0, 2) + '/' + val.slice(2);
+                                                    if (val.length > 5) val = val.slice(0, 5) + '/' + val.slice(5, 9);
+                                                    setDisplayDate(val);
+
+                                                    // Update actual backend state when 10 chars are reached
+                                                    if (val.length === 10) {
+                                                        const [d, m, y] = val.split('/');
+                                                        setJourneyDate(`${y}-${m}-${d}`);
+                                                        classInputRef.current?.focus();
+                                                    } else {
+                                                        setJourneyDate('');
+                                                    }
+                                                }}
+                                                required
+                                                className="input-field"
+                                                style={{ paddingRight: '40px', width: '100%' }}
+                                            />
+
+                                            {/* Hidden native date picker activated by clicking the icon area */}
+                                            <input
+                                                type="date"
+                                                min={minDate}
+                                                max={maxDate}
+                                                onChange={(e) => {
+                                                    const selected = e.target.value; // Returns YYYY-MM-DD
+                                                    setJourneyDate(selected);
+                                                    if (selected) {
+                                                        const [y, m, d] = selected.split('-');
+                                                        setDisplayDate(`${d}/${m}/${y}`);
+                                                        classInputRef.current?.focus();
+                                                    }
+                                                }}
+                                                style={{
+                                                    position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
+                                                    opacity: 0, width: '30px', height: '30px', cursor: 'pointer', zIndex: 2
+                                                }}
+                                            />
+
+                                            {/* Permanent Calendar Icon */}
+                                            <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', zIndex: 1, fontSize: '18px' }}>
+                                                📅
+                                            </span>
+                                        </div>
                                     </div>
+
+                                    {/* 4. CLASS DROPDOWN */}
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>Choose Class</label>
                                         <select ref={classInputRef} value={seatClass} onChange={e => setSeatClass(e.target.value)} className="input-field">
