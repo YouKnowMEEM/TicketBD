@@ -567,9 +567,8 @@ export function App() {
 
     // --- UNIFIED CHECKOUT HANDLER ---
     const handleCheckout = async (trainId) => {
-        // 🛑 DEBUG LOGS
-        console.log("=== DEBUGGING CHECKOUT ===");
-        console.log("1. Raw selectedSeats array:", selectedSeats);
+        // 🛑 JSON STRINGIFY LOGS (Will print the actual key-value pairs clearly in Console)
+        console.log("1. Selected Seats JSON:", JSON.stringify(selectedSeats, null, 2));
 
         if (selectedSeats.length === 0) {
             alert("Please select at least one seat.");
@@ -579,10 +578,11 @@ export function App() {
         const fromId = getStationIdByName(fromStationName);
         const toId = getStationIdByName(toStationName);
 
-        // Try both property names just to be safe while debugging
-        const mappedBookings = selectedSeats.map(seat => ({
-            seat_id: seat.seat_id !== undefined ? seat.seat_id : seat.id
-        }));
+        // Smart fallback mapping to catch seat_id, id, or seatId
+        const mappedBookings = selectedSeats.map(seat => {
+            const id = seat.seat_id || seat.id || seat.seatId;
+            return { seat_id: id };
+        });
 
         const checkoutPayload = {
             userId: studentId,
@@ -594,7 +594,7 @@ export function App() {
             bookings: mappedBookings
         };
 
-        console.log("2. Final Payload being sent:", checkoutPayload);
+        console.log("2. Payload JSON being sent:", JSON.stringify(checkoutPayload, null, 2));
 
         setCheckoutLoading(true);
 
@@ -607,12 +607,12 @@ export function App() {
                 body: JSON.stringify(checkoutPayload)
             });
 
+            const data = await response.json();
+            console.log("3. Backend Response Message:", data);
+
             if (response.status === 401 || response.status === 403) {
                 return handleSessionExpired();
             }
-
-            const data = await response.json();
-            console.log("3. Backend Response:", data);
 
             if (data.success) {
                 alert("Booking confirmed! Your tickets have been generated.");
@@ -621,7 +621,7 @@ export function App() {
                 setProfileTab('tickets');
                 loadProfileData();
             } else {
-                alert("Checkout failed: " + data.message);
+                alert("Checkout failed: " + (data.message || data.error));
             }
         } catch (error) {
             console.error("Error during checkout:", error);
