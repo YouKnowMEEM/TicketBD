@@ -583,8 +583,8 @@ export function App() {
             endStationId: toId,
             journeyDate: journeyDate,
             paymentMethod: 'bKash',
-            // The backend is specifically looking for this 'bookings' array!
-            bookings: selectedSeats.map(seat => ({ seat_id: seat.id }))
+            // 🛑 FIXED: Changed seat.id to seat.seat_id to match the database response
+            bookings: selectedSeats.map(seat => ({ seat_id: seat.seat_id }))
         };
 
         setCheckoutLoading(true);
@@ -594,7 +594,7 @@ export function App() {
             const response = await authFetch(`${API_BASE}/api/checkout`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json' // 🛑 This is the magic key!
+                    'Content-Type': 'application/json' // Ensures backend reads it as JSON
                 },
                 body: JSON.stringify(checkoutPayload)
             });
@@ -609,7 +609,7 @@ export function App() {
                 alert("Booking confirmed! Your tickets have been generated.");
                 setSelectedSeats([]);
                 fetchCoachSeats(trainId, selectedCoach, journeyDate);
-                setProfileTab('tickets');
+                setProfileTab('tickets'); // Or however you handle redirecting to success page
                 loadProfileData();
             } else {
                 alert("Checkout failed: " + data.message);
