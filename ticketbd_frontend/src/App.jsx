@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import jsPDF from 'jspdf';
 import './App.css';
 
@@ -93,7 +93,6 @@ export function App() {
 
     // --- Station State ---
     const [stationList, setStationList] = useState([]);
-
     // --- Auth / Session States ---
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [token, setToken] = useState(null);
@@ -173,12 +172,20 @@ export function App() {
 
     // --- EFFECT 2: FETCH STATIONS FROM BACKEND ON LOAD ---
     useEffect(() => {
-        fetch(`${API_BASE}/api/stations`)
-            .then(res => res.json())
-            .then(data => {
-                if (Array.isArray(data)) setStationList(data);
-            })
-            .catch(err => console.error("🛑 Failed to load stations from MySQL:", err));
+        const fetchStations = async () => {
+            try {
+                // IMPORTANT: If your backend runs on a different port (like 8080 or 3001), update this URL!
+                const response = await fetch('http://localhost:5000/api/stations');
+                if (!response.ok) throw new Error('Network response was not ok');
+
+                const data = await response.json();
+                setStationList(data);
+            } catch (error) {
+                console.error("Failed to fetch stations from database:", error);
+            }
+        };
+
+        fetchStations();
     }, []);
 
     // --- EFFECT 3: RESTORE SESSION ON PAGE LOAD ---
