@@ -131,6 +131,111 @@ async function validateActiveSeatLimit(connection, userId, trainId, startStation
 }
 
 // ==========================================
+// 💰 FARE HELPERS — PRORATE Seat.price BY DISTANCE TRAVELLED (NO SCHEMA CHANGE)
+// ==========================================
+// Seat.price is the FULL end-to-end fare for a class on a given train (that's
+// the number the seed scripts insert, e.g. Chattogram<->Sylhet for Paharika).
+// A passenger travelling only part of the route must pay a fraction of that,
+// not the full amount. We don't have a distance/km column anywhere in the
+// schema and are not allowed to add one, but every Stoppage row already has
+// arrival_time/departure_time — so we use elapsed schedule time as a proxy
+// for distance: (time from boarding to alighting) / (time for the whole
+// route). This is computed fresh on every request; nothing is stored.
+//
+// Helper: "HH:MM:SS" -> minutes since midnight (fractional seconds allowed).
+function timeStrToMinutes(t) {
+    if (!t) return null;
+    const [h, m, s] = String(t).split(':').map(Number);
+    return h * 60 + m + (s || 0) / 60;
+}
+
+// Walks a train's Stoppage rows (in stoppage_id order, i.e. the order they
+// were inserted for that route — origin to terminus) and returns each
+// station's elapsed minutes since the train's origin departure. Times are
+// rolled forward across midnight whenever a later clock reading is smaller
+// than the previous one, so overnight trains (e.g. Cox's Bazar Express)
+// still produce a strictly increasing, correct cumulative timeline.
+async function getCumulativeSchedule(db, trainId) {
+    const [stops] = await db.query(
+        `SELECT station_id, arrival_time, departure_time
+         FROM Stoppage
+         WHERE train_id = ?
+         ORDER BY stoppage_id ASC`,
+        [trainId]
+    );
+
+    if (stops.length < 2) return null;
+
+    const originDeparture = timeStrToMinutes(stops[0].departure_time);
+    if (originDeparture === null) return null;
+
+    let cumulative = 0;
+    let clock = originDeparture;
+    const schedule = [{ station_id: stops[0].station_id, arrivalOffset: null, departureOffset: 0 }];
+
+    for (let i = 1; i < stops.length; i++) {
+        const arrMin = timeStrToMinutes(stops[i].arrival_time);
+        const depMin = timeStrToMinutes(stops[i].departure_time);
+
+        let arrOffset = null;
+        if (arrMin !== null) {
+            let delta = arrMin - clock;
+            while (delta < 0) delta += 24 * 60;
+            cumulative += delta;
+            arrOffset = cumulative;
+            clock = arrMin;
+        }
+
+        let depOffset = arrOffset;
+        if (depMin !== null) {
+            let delta = depMin - clock;
+            while (delta < 0) delta += 24 * 60;
+            cumulative += delta;
+            depOffset = cumulative;
+            clock = depMin;
+        }
+
+        schedule.push({ station_id: stops[i].station_id, arrivalOffset: arrOffset, departureOffset: depOffset });
+    }
+
+    return schedule;
+}
+
+// Returns the fraction (0, 1] of the FULL route that a startStation->endStation
+// segment represents for a given train, or null if it can't be determined
+// (unknown train, station not on this route, or start is not before end on
+// this particular direction of travel).
+async function getSegmentFraction(db, trainId, startStationId, endStationId) {
+    const schedule = await getCumulativeSchedule(db, trainId);
+    if (!schedule) return null;
+
+    const startEntry = schedule.find(s => s.station_id === Number(startStationId));
+    const endEntry = schedule.find(s => s.station_id === Number(endStationId));
+    if (!startEntry || !endEntry) return null;
+
+    const startOffset = startEntry.departureOffset;
+    const endOffset = endEntry.arrivalOffset ?? endEntry.departureOffset;
+    const last = schedule[schedule.length - 1];
+    const totalOffset = last.arrivalOffset ?? last.departureOffset;
+
+    if (startOffset === null || endOffset === null || !totalOffset || totalOffset <= 0) return null;
+
+    const segmentDuration = endOffset - startOffset;
+    if (segmentDuration <= 0) return null;
+
+    return Math.min(1, segmentDuration / totalOffset);
+}
+
+// Prorates a full-route base price by the segment fraction and rounds to
+// the nearest paisa/poisha (2dp), matching the DECIMAL(10,2) Seat.price
+// column. Returns null if the fraction can't be determined.
+async function calculateSegmentFare(db, trainId, startStationId, endStationId, basePrice) {
+    const fraction = await getSegmentFraction(db, trainId, startStationId, endStationId);
+    if (fraction === null) return null;
+    return Math.round(Number(basePrice) * fraction * 100) / 100;
+}
+
+// ==========================================
 // 🚀 API ROUTE: SIGNUP (ZERO SCHEMA CHANGE - JWT SIGNED TOKEN)
 // ==========================================
 app.post('/api/signup', async (req, res) => {
@@ -407,8 +512,18 @@ app.get('/api/trains', async (req, res) => {
                 `SELECT class, MIN(price) AS price FROM Seat WHERE train_id = ? GROUP BY class`,
                 [train.train_id]
             );
+
+            // Seat.price is the FULL route fare. Prorate it down to the
+            // fromStation->toStation segment the passenger actually searched
+            // for (same fraction applies to every class on this train, so
+            // it's computed once here rather than per-class).
+            const fraction = await getSegmentFraction(pool, train.train_id, fromStation, toStation);
+
             const fareMap = {};
-            fares.forEach(f => { fareMap[f.class] = f.price; });
+            fares.forEach(f => {
+                if (fraction === null) return; // leave this class out -> frontend already shows "N/A"; shouldn't normally happen since this train already matched the route search
+                fareMap[f.class] = Math.round(Number(f.price) * fraction * 100) / 100;
+            });
             train.fares = fareMap;
 
             // Fetch class-level seat availability counts
@@ -479,12 +594,16 @@ app.get('/api/coach-summary', async (req, res) => {
         const [rows] = await connection.query(query, [journeyDate, trainId]);
         connection.release();
 
+        // Nested by class, then coach_name: { SNIGDHA: { SCHA: {...} }, S_CHAIR: { SCHA: {...} } }
+        // A flat { [coach_name]: {...} } map would collide whenever the same
+        // coach_name carries seats of more than one class on the same train.
         const summary = {};
         rows.forEach(r => {
             const total = Number(r.total_seats) || 0;
             const booked = Number(r.booked_seats) || 0;
             const available = Math.max(0, total - booked);
-            summary[r.coach_name] = { total, booked, available };
+            if (!summary[r.class]) summary[r.class] = {};
+            summary[r.class][r.coach_name] = { total, booked, available };
         });
 
         res.json({ success: true, summary });
@@ -635,7 +754,7 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
 
         for (const bookingId of bookingIds) {
             const [bookings] = await connection.query(`
-                SELECT b.booking_id, b.seat_id, b.journey_date, b.start_station_id, b.end_station_id, s.price, b.booking_time
+                SELECT b.booking_id, b.train_id, b.seat_id, b.journey_date, b.start_station_id, b.end_station_id, s.price, b.booking_time
                 FROM Booking b
                          JOIN Seat s ON b.seat_id = s.seat_id
                 WHERE b.booking_id = ? AND b.user_id = ? AND b.status = 'PENDING'
@@ -653,17 +772,29 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
                 throw new Error("Your 4-minute window to complete the payment has expired.");
             }
 
+            // s.price is the FULL route fare — charge only for the segment
+            // actually booked (start_station_id -> end_station_id), the same
+            // way the search results price it. This is the source of truth
+            // for what gets charged, independent of whatever the client saw
+            // on screen.
+            const finalPrice = await calculateSegmentFare(
+                connection, booking.train_id, booking.start_station_id, booking.end_station_id, booking.price
+            );
+            if (finalPrice === null) {
+                throw new Error("Could not determine the fare for this journey segment. Please try selecting your seats again.");
+            }
+
             const [ticketResult] = await connection.query(`
                 INSERT INTO Ticket (booking_id, user_id, journey_date, price_paid, status)
                 VALUES (?, ?, ?, ?, 'ACTIVE')
-            `, [booking.booking_id, userId, booking.journey_date, booking.price]);
+            `, [booking.booking_id, userId, booking.journey_date, finalPrice]);
             const newTicketId = ticketResult.insertId;
 
             const transactionId = `TXN-${Date.now()}-${crypto.randomUUID().split('-')[0]}`;
             await connection.query(`
                 INSERT INTO Payment (transaction_id, ticket_id, amount, payment_method)
                 VALUES (?, ?, ?, ?)
-            `, [transactionId, newTicketId, booking.price, paymentMethod || 'bKash']);
+            `, [transactionId, newTicketId, finalPrice, paymentMethod || 'bKash']);
 
             await connection.query(`
                 UPDATE Booking SET status = 'CONFIRMED' WHERE booking_id = ?
@@ -684,7 +815,7 @@ app.post('/api/checkout', authenticateToken, authorizeSelfBody('userId'), async 
                 await connection.query(`
                     INSERT INTO ResaleSegment (refund_request_id, new_user_id, start_station_id, end_station_id, allocated_price)
                     VALUES (?, ?, ?, ?, ?)
-                `, [refund.refund_request_id, userId, booking.start_station_id, booking.end_station_id, booking.price]);
+                `, [refund.refund_request_id, userId, booking.start_station_id, booking.end_station_id, finalPrice]);
 
                 await connection.query(`
                     UPDATE RefundRequest

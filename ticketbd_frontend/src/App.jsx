@@ -1709,7 +1709,7 @@ export function App() {
                                                                 }}
                                                             >
                                                                 {trainClasses[seatClass].map(coach => {
-                                                                    const availInfo = coachSummary[coach];
+                                                                    const availInfo = coachSummary[seatClass]?.[coach];
                                                                     const availCount = availInfo ? availInfo.available : getSeatCount(coach);
                                                                     return (
                                                                         <option key={coach} value={coach}>
