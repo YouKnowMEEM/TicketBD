@@ -1585,7 +1585,7 @@ export function App() {
                                                         {train.train_name.toUpperCase()} ({train.train_number})
                                                     </h3>
                                                     <div style={{ fontSize: '12px', color: 'var(--rail-green)', fontWeight: '600', marginTop: '4px' }}>
-                                                        👥 0+ users are trying to book ticket(s)
+
                                                     </div>
                                                 </div>
                                             </div>
