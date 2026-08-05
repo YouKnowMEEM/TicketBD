@@ -1,141 +1,92 @@
 import React, { useState, useRef, useEffect } from 'react';
 import jsPDF from 'jspdf';
-import './index.css';
+import './App.css';
 
 const API_BASE = 'https://ticketbd-backend.onrender.com';
 
-// --- EXACT BANGLADESH RAILWAY ETICKET.RAILWAY.GOV.BD COACH BLUEPRINTS ---
-// 5-Column Grid: [Left 1, Left 2, Aisle (null), Right 1, Right 2]
-
-// 1. 60-Seat Shovon Chair / Snigdha Coach (SCHA, JA, JHA, NEO, TA, THA, DA, TO, THO)
-const BLUEPRINT_60_SEAT = [
-    [1, null, null, null, null],
-    [2, null, null, 3, 4],
-    [5, 6, null, 7, 8],
-    [9, 10, null, 11, 12],
-    [13, 14, null, 15, 16],
-    [17, 18, null, 19, 20],
-    [21, 22, null, 23, 24],
-    [25, 26, null, 27, 28],
-    [29, 30, null, 31, 32],
-    [null, null, null, null, null], // Middle Aisle Gap
-    [33, 34, null, 35, 36],
-    [37, 38, null, 39, 40],
-    [41, 42, null, 43, 44],
-    [45, 46, null, 47, 48],
-    [49, 50, null, 51, 52],
-    [53, 54, null, 55, 56],
-    [57, 58, null, null, 59],
-    [null, null, null, null, 60]
-];
-
-// 2. 15-Seat Small Coach (KA, DHA)
-const BLUEPRINT_15_SEAT = [
-    [1, null, null, null, null],
-    [2, 3, null, 4, 5],
-    [6, 7, null, 8, 9],
-    [10, 11, null, 12, 13],
-    [14, null, null, null, 15]
-];
-
-// 3. 55-Seat Coach (GHA, CHA, GA, UMA, DANT)
-const BLUEPRINT_55_SEAT = [
-    [1, 2, null, null, 3],
-    [4, 5, null, 6, 7],
-    [8, 9, null, 10, 11],
-    [12, 13, null, 14, 15],
-    [16, 17, null, 18, 19],
-    [20, 21, null, 22, 23],
-    [24, 25, null, 26, 27],
-    [null, null, null, null, null], // Middle Aisle Gap
-    [28, 29, null, 30, 31],
-    [32, 33, null, 34, 35],
-    [36, 37, null, 38, 39],
-    [40, 41, null, 42, 43],
-    [44, 45, null, 46, 47],
-    [48, 49, null, 50, 51],
-    [52, null, null, 53, 54],
-    [55, null, null, null, null]
-];
-
-// 4. AC Berth / Cabin Blueprint (33 Berths: 6 cabins)
-const BLUEPRINT_AC_B = [
-    [1, 2, 3, null, 4, 5, 6],
-    [7, 8, 9, null, 10, 11, 12],
-    [13, 14, 15, null, 16, 17, 18],
-    [19, 20, 21, null, 22, 23, 24],
-    [25, 26, 27, null, 28, 29, 30],
-    [31, 32, 33, null, null, null, null]
-];
-
-// Map by Class or Coach Name
+// --- EXACT BANGLADESH RAILWAY COACH BLUEPRINTS ---
 const COACH_MAPS = {
-    // Class Fallbacks
-    'AC_S': BLUEPRINT_55_SEAT,
-    'AC_B': BLUEPRINT_AC_B,
-    'SNIGDHA': BLUEPRINT_55_SEAT,
-    'F_BERTH': BLUEPRINT_AC_B,
-    'F_SEAT': BLUEPRINT_55_SEAT,
-    'F_CHAIR': BLUEPRINT_55_SEAT,
-    'S_CHAIR': BLUEPRINT_60_SEAT,
-
-    // Specific Coach Blueprints matching Screenshots exactly
-    'KA': BLUEPRINT_15_SEAT,
-    'DHA': BLUEPRINT_15_SEAT,
-    'SCHA': BLUEPRINT_60_SEAT,
-    'JA': BLUEPRINT_60_SEAT,
-    'JHA': BLUEPRINT_60_SEAT,
-    'NEO': BLUEPRINT_60_SEAT,
-    'TA': BLUEPRINT_60_SEAT,
-    'THA': BLUEPRINT_60_SEAT,
-    'DA': BLUEPRINT_60_SEAT,
-    'TO': BLUEPRINT_60_SEAT,
-    'THO': BLUEPRINT_60_SEAT,
-    'GHA': BLUEPRINT_55_SEAT,
-    'CHA': BLUEPRINT_55_SEAT,
-    'GA': BLUEPRINT_55_SEAT,
-    'UMA': BLUEPRINT_55_SEAT,
-    'DANT': BLUEPRINT_55_SEAT
-};
-
-const DEFAULT_COACHES_BY_CLASS = {
-    'AC_S': ['GA', 'GHA', 'UMA'],
-    'AC_B': ['GA', 'GHA', 'KHA'],
-    'SNIGDHA': ['CHA', 'SCHA', 'JA', 'NEO', 'JHA'],
-    'F_BERTH': ['KHA'],
-    'F_SEAT': ['KHA'],
-    'F_CHAIR': ['KHA', 'GA'],
-    'S_CHAIR': ['THA', 'DA', 'DHA', 'DANT', 'TO', 'THO', 'TA', 'KA']
+    'AC_S': [ // 33 seats, 17 rows, 2 aisle columns on left
+        [null, null, 3, 2, 1],
+        [null, null, 6, 5, 4],
+        [null, null, null, null, null],
+        [null, null, 9, 8, 7],
+        [null, null, 12, 11, 10],
+        [null, null, null, null, null],
+        [null, null, 15, 14, 13],
+        [null, null, null, null, null],
+        [null, null, 18, 17, 16],
+        [null, null, null, null, null],
+        [null, null, 21, 20, 19],
+        [null, null, null, null, null],
+        [null, null, 24, 23, 22],
+        [null, null, 27, 26, 25],
+        [null, null, null, null, null],
+        [null, null, 28, 29, 30],
+        [null, null, 31, 32, 33]
+    ],
+    'F_SEAT': [
+        [null, null, 3, 2, 1],
+        [null, null, 6, 5, 4],
+        [null, null, null, null, null],
+        [null, null, 9, 8, 7],
+        [null, null, 12, 11, 10],
+        [null, null, null, null, null],
+        [null, null, 15, 14, 13],
+        [null, null, null, null, null],
+        [null, null, 18, 17, 16],
+        [null, null, null, null, null],
+        [null, null, 21, 20, 19],
+        [null, null, null, null, null],
+        [null, null, 24, 23, 22],
+        [null, null, 27, 26, 25],
+        [null, null, null, null, null],
+        [null, null, 28, 29, 30],
+        [null, null, 31, 32, 33]
+    ],
+    'SNIGDHA': [ // 55 seats, 16 rows.
+        [3, null, null, 2, 1],
+        [7, 6, null, 5, 4],
+        [11, 10, null, 9, 8],
+        [15, 14, null, 13, 12],
+        [19, 18, null, 17, 16],
+        [23, 22, null, 21, 20],
+        [27, 26, null, 25, 24],
+        [null, null, null, null, null],
+        [31, 30, null, 29, 28],
+        [35, 34, null, 33, 32],
+        [39, 38, null, 37, 36],
+        [43, 42, null, 41, 40],
+        [47, 46, null, 45, 44],
+        [51, 50, null, 49, 48],
+        [54, 53, null, null, 52],
+        [null, null, null, null, 55]
+    ],
+    'S_CHAIR': [ // 60 seats, 18 rows.
+        [null, null, null, null, 1],
+        [4, 3, null, null, 2],
+        [8, 7, null, 6, 5],
+        [12, 11, null, 10, 9],
+        [16, 15, null, 14, 13],
+        [20, 19, null, 18, 17],
+        [24, 23, null, 22, 21],
+        [28, 27, null, 26, 25],
+        [32, 31, null, 30, 29],
+        [null, null, null, null, null],
+        [36, 35, null, 34, 33],
+        [40, 39, null, 38, 37],
+        [44, 43, null, 42, 41],
+        [48, 47, null, 46, 45],
+        [52, 51, null, 50, 49],
+        [56, 55, null, 54, 53],
+        [59, null, null, 58, 57],
+        [60, null, null, null, null]
+    ]
 };
 
 function Spinner({ dark }) {
     return <span className={`tb-spinner ${dark ? 'dark' : ''}`} />;
 }
-
-// --- STATIC RETURN & REFUND POLICY BOX ---
-const REFUND_POLICY_BOX = (
-    <div style={{
-        backgroundColor: '#fffbe3', border: '1px solid #f0e68c', borderRadius: '8px',
-        padding: '14px 18px', marginTop: '16px', fontSize: '12px', color: '#444', lineHeight: '1.6'
-    }}>
-        <div style={{ fontWeight: 'bold', color: '#b45309', marginBottom: '6px', fontSize: '13px' }}>
-            📋 Ticket Return Policy (In Case of Not Resold Portion)
-        </div>
-        <ul style={{ margin: '0 0 10px 0', paddingLeft: '18px' }}>
-            <li>In case of ticket return <strong>48 hours prior</strong> to journey: BDT 40 or 10% of ticket fare (whichever is higher) will be deducted.</li>
-            <li>In case of less than <strong>48 hours and more than 24 hours</strong>: BDT 40 or 25% of ticket fare (whichever is higher) will be deducted.</li>
-            <li>In case of less than <strong>24 hours and more than 12 hours</strong>: BDT 40 or 50% of ticket fare (whichever is higher) will be deducted.</li>
-            <li>For less than <strong>12 hours and more than 06 hours</strong>: BDT 40 or 75% of ticket fare (whichever is higher) will be deducted.</li>
-            <li>No refund for less than <strong>06 hours</strong>.</li>
-        </ul>
-        <div style={{ fontWeight: 'bold', color: '#15803d', marginBottom: '4px' }}>
-            🔄 Resold portion: User will get refund of the resold part price.
-        </div>
-        <div style={{ fontSize: '11px', color: '#777' }}>
-            * Service charges (20৳) for online purchase are non-refundable.
-        </div>
-    </div>
-);
 
 // --- DATE & TIME FORMAT HELPERS ---
 const formatToDisplayDate = (yyyy_mm_dd) => {
@@ -178,7 +129,7 @@ const calculateDuration = (startTime, endTime) => {
     let startMinutes = h1 * 60 + m1;
     let endMinutes = h2 * 60 + m2;
     if (endMinutes < startMinutes) {
-        endMinutes += 24 * 60;
+        endMinutes += 24 * 60; // Overnight
     }
     const diff = endMinutes - startMinutes;
     const hours = Math.floor(diff / 60);
@@ -197,7 +148,6 @@ export function App() {
     const [token, setToken] = useState(null);
     const [authMode, setAuthMode] = useState('login');
     const [studentId, setStudentId] = useState('');
-    const [fullName, setFullName] = useState('');
     const [password, setPassword] = useState('');
     const [mobile, setMobile] = useState('');
     const [authMessage, setAuthMessage] = useState('');
@@ -208,7 +158,7 @@ export function App() {
     const [toStationName, setToStationName] = useState('');
     const [journeyDate, setJourneyDate] = useState('');
     const [displayDate, setDisplayDate] = useState('');
-    const [seatClass, setSeatClass] = useState('SNIGDHA');
+    const [seatClass, setSeatClass] = useState('Snigdha');
     const [trains, setTrains] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
 
@@ -320,10 +270,8 @@ export function App() {
             setLockedBookingIds([]);
             setSelectedSeats([]);
             if (expandedTrainId && selectedCoach && journeyDate) {
-                const fromId = getStationIdByName(fromStationName);
-                const toId = getStationIdByName(toStationName);
-                fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate, fromId, toId);
-                fetchCoachSummary(expandedTrainId, journeyDate, fromId, toId);
+                fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate);
+                fetchCoachSummary(expandedTrainId, journeyDate);
             }
         }
         return () => clearInterval(lockTimerRef.current);
@@ -364,7 +312,7 @@ export function App() {
     };
 
     // =========================================================================
-    // 🚂 BANGLADESH RAILWAY E-TICKET PDF GENERATOR (WITH USER'S FULL NAME)
+    // 🚂 USER'S CUSTOM BANGLADESH RAILWAY E-TICKET PDF GENERATOR
     // =========================================================================
     const generatePDF = (ticket) => {
         const doc = new jsPDF('p', 'mm', 'a4');
@@ -480,13 +428,11 @@ export function App() {
 
         curY += 7;
 
-        const passengerName = ticket.username || ticket.full_name || ticket.passenger_name || userProfile.username || `CUET Student (${studentId})`;
-
         const passengerTableData = [
-            ['Passenger Name:', passengerName],
+            ['Passenger Name:', `CUET Student (${studentId})`],
             ['Identification Type:', 'Student ID'],
             ['Identification Number:', studentId],
-            ['Mobile Number:', ticket.user_phone || 'N/A'],
+            ['Mobile Number:', ticket.user_phone],
             ['PNR Number:', ticket.transaction_id || 'N/A']
         ];
 
@@ -575,7 +521,7 @@ export function App() {
                 const response = await fetch(`${API_BASE}/api/signup`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ studentId, mobile, password, fullName, username: fullName })
+                    body: JSON.stringify({ studentId, mobile, password })
                 });
                 const data = await response.json();
                 setAuthMessage(data.message);
@@ -732,7 +678,7 @@ export function App() {
         setCancelLoading(false);
     };
 
-    // --- SEARCH TRAINS HANDLER ---
+    // --- SEARCH TRAINS HANDLER (WITH PAST DEPARTURE FILTERING) ---
     const searchTrains = async (e) => {
         e.preventDefault();
         if (!isLoggedIn) {
@@ -754,7 +700,21 @@ export function App() {
             const response = await fetch(`${API_BASE}/api/trains?fromStation=${fromId}&toStation=${toId}&journeyDate=${journeyDate}`);
             const data = await response.json();
 
+            // Client-side past departure filter if searching for TODAY
+            const todayStr = new Date().toISOString().split('T')[0];
             let filteredTrains = Array.isArray(data) ? data : [];
+
+            if (journeyDate === todayStr) {
+                const now = new Date();
+                const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+                filteredTrains = filteredTrains.filter(train => {
+                    if (!train.start_time) return true;
+                    const [h, m] = train.start_time.split(':').map(Number);
+                    const trainMinutes = h * 60 + m;
+                    return trainMinutes > currentMinutes;
+                });
+            }
 
             setTrains(filteredTrains);
             setExpandedTrainId(null);
@@ -767,18 +727,10 @@ export function App() {
         setSearchLoading(false);
     };
 
-    const fetchCoachSeats = async (targetTrainId, targetCoach, targetDate, fromId, toId) => {
+    const fetchCoachSeats = async (targetTrainId, targetCoach, targetDate) => {
         setSeatsLoading(true);
         try {
-            const queryParams = new URLSearchParams({
-                trainId: targetTrainId,
-                coachName: targetCoach,
-                journeyDate: targetDate
-            });
-            if (fromId) queryParams.append('startStationId', fromId);
-            if (toId) queryParams.append('endStationId', toId);
-
-            const response = await fetch(`${API_BASE}/api/seats?${queryParams.toString()}`);
+            const response = await fetch(`${API_BASE}/api/seats?trainId=${targetTrainId}&coachName=${targetCoach}&journeyDate=${targetDate}`);
             const data = await response.json();
             if (data.success) setCoachSeats(data.seats);
         } catch (err) {
@@ -787,16 +739,9 @@ export function App() {
         setSeatsLoading(false);
     };
 
-    const fetchCoachSummary = async (targetTrainId, targetDate, fromId, toId) => {
+    const fetchCoachSummary = async (targetTrainId, targetDate) => {
         try {
-            const queryParams = new URLSearchParams({
-                trainId: targetTrainId,
-                journeyDate: targetDate
-            });
-            if (fromId) queryParams.append('startStationId', fromId);
-            if (toId) queryParams.append('endStationId', toId);
-
-            const response = await fetch(`${API_BASE}/api/coach-summary?${queryParams.toString()}`);
+            const response = await fetch(`${API_BASE}/api/coach-summary?trainId=${targetTrainId}&journeyDate=${targetDate}`);
             const data = await response.json();
             if (data.success) setCoachSummary(data.summary || {});
         } catch (err) {
@@ -886,10 +831,8 @@ export function App() {
                 setSelectedSeats([]);
                 setLockedBookingIds([]);
                 if (expandedTrainId && selectedCoach && journeyDate) {
-                    const fromId = getStationIdByName(fromStationName);
-                    const toId = getStationIdByName(toStationName);
-                    fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate, fromId, toId);
-                    fetchCoachSummary(expandedTrainId, journeyDate, fromId, toId);
+                    fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate);
+                    fetchCoachSummary(expandedTrainId, journeyDate);
                 }
                 setProfileTab('tickets');
                 loadProfileData();
@@ -942,8 +885,6 @@ export function App() {
         switch (ticket.refund_status) {
             case 'RESOLD_FULL_REFUND':
                 return { label: 'Full refund issued', cls: 'badge-resolved' };
-            case 'PARTIALLY_RESOLD':
-                return { label: 'Partially resold', cls: 'badge-partial' };
             case 'EXPIRED_PARTIAL_REFUND':
                 return { label: 'Partial refund issued', cls: 'badge-partial' };
             default:
@@ -976,7 +917,7 @@ export function App() {
                     {isLoggedIn ? (
                         <>
                             <div className="tb-profile-chip" onClick={loadProfileData}>
-                                {userProfile.username || studentId}
+                                {studentId}
                             </div>
                             <button className="btn btn-ghost" style={{ padding: '7px 14px', fontSize: '13px', background: 'transparent', color: '#fff', borderColor: 'rgba(255,255,255,0.4)' }} onClick={handleLogout}>
                                 Logout
@@ -1131,7 +1072,7 @@ export function App() {
             {/* ================= PARTIAL / FULL CANCELLATION MODAL ================= */}
             {showCancelModal && cancelModalData && (
                 <div className="tb-modal-overlay" onClick={() => setShowCancelModal(false)}>
-                    <div className="tb-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px' }}>
+                    <div className="tb-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
                         <button className="tb-modal-close" onClick={() => setShowCancelModal(false)}>✕</button>
                         <span className="eyebrow" style={{ color: 'var(--red)' }}>Ticket Cancellation</span>
                         <h2 style={{ margin: '4px 0 10px 0', fontSize: '20px' }}>Select Seats to Cancel</h2>
@@ -1166,7 +1107,7 @@ export function App() {
                             })}
                         </div>
 
-                        <div style={{ backgroundColor: '#f8fafc', padding: '14px', borderRadius: '6px', border: '1px solid var(--line)', marginBottom: '16px', fontSize: '13px' }}>
+                        <div style={{ backgroundColor: '#f8fafc', padding: '14px', borderRadius: '6px', border: '1px solid var(--line)', marginBottom: '20px', fontSize: '13px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                                 <span>Selected Seat Fare:</span>
                                 <strong>৳ {cancelModalData.totalFare.toFixed(2)}</strong>
@@ -1181,9 +1122,7 @@ export function App() {
                             </div>
                         </div>
 
-                        {REFUND_POLICY_BOX}
-
-                        <div style={{ display: 'flex', gap: '10px', marginTop: '18px' }}>
+                        <div style={{ display: 'flex', gap: '10px' }}>
                             <button className="btn btn-ghost" style={{ flex: 1, padding: '12px' }} onClick={() => setShowCancelModal(false)}>
                                 CANCEL
                             </button>
@@ -1271,19 +1210,6 @@ export function App() {
                             )}
 
                             <form onSubmit={handleAuthSubmit}>
-                                {authMode === 'signup' && (
-                                    <div style={{ marginBottom: '15px' }}>
-                                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '5px', color: '#333' }}>Full Name</label>
-                                        <input
-                                            type="text"
-                                            placeholder="Enter Your Full Name"
-                                            value={fullName}
-                                            onChange={(e) => setFullName(e.target.value)}
-                                            required
-                                            className="input-field"
-                                        />
-                                    </div>
-                                )}
                                 <div style={{ marginBottom: '15px' }}>
                                     <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '5px', color: '#333' }}>Student ID</label>
                                     <input
@@ -1359,95 +1285,86 @@ export function App() {
 
                         {profileTab === 'tickets' && (
                             <div>
-                                {REFUND_POLICY_BOX}
-                                <div style={{ marginTop: '20px' }}>
-                                    {Object.keys(groupedTickets).length === 0 ? (
-                                        <div className="empty-state">
-                                            <span className="icon">🎫</span>
-                                            You have no booked tickets in the last 15 days.
-                                        </div>
-                                    ) : (
-                                        <div style={{ display: 'grid', gap: '22px' }}>
-                                            {Object.entries(groupedTickets).map(([pnr, ticketGroup]) => {
-                                                const firstTicket = ticketGroup[0];
-                                                const activeInGroup = ticketGroup.filter(t => t.ticket_status === 'ACTIVE');
-                                                const isGroupActive = activeInGroup.length > 0;
-                                                const seatListStr = ticketGroup.map(t => `${t.coach_name}-${t.seat_number}`).join(', ');
-                                                const badge = refundBadge(firstTicket);
+                                {Object.keys(groupedTickets).length === 0 ? (
+                                    <div className="empty-state">
+                                        <span className="icon">🎫</span>
+                                        You have no booked tickets in the last 15 days.
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'grid', gap: '22px' }}>
+                                        {Object.entries(groupedTickets).map(([pnr, ticketGroup]) => {
+                                            const firstTicket = ticketGroup[0];
+                                            const activeInGroup = ticketGroup.filter(t => t.ticket_status === 'ACTIVE');
+                                            const isGroupActive = activeInGroup.length > 0;
+                                            const seatListStr = ticketGroup.map(t => `${t.coach_name}-${t.seat_number}`).join(', ');
+                                            const badge = refundBadge(firstTicket);
 
-                                                return (
-                                                    <div key={pnr} className={`ticket-stub ${!isGroupActive ? 'is-cancelled' : ''}`}>
-                                                        <div className="ticket-stub-main">
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                                                                <h3 style={{ margin: 0, color: '#2c3e50', fontSize: '17px' }}>
-                                                                    {firstTicket.train_name} ({firstTicket.train_number})
-                                                                </h3>
-                                                                {badge && <span className={`badge ${badge.cls}`}>{badge.label}</span>}
-                                                            </div>
-                                                            <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Journey:</strong> {formatToDisplayDate(firstTicket.journey_date)}</p>
-                                                            <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Route:</strong> {firstTicket.start_station} to {firstTicket.end_station}</p>
-                                                            <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Seat(s):</strong> {seatListStr}</p>
-                                                            <p className="pnr" style={{ margin: '8px 0 0 0' }}>PNR: {pnr}</p>
-
-                                                            {firstTicket.ticket_status === 'CANCELLED' && (
-                                                                <div style={{
-                                                                    margin: '14px 0 0 0', padding: '12px',
-                                                                    backgroundColor: firstTicket.refund_status === 'PENDING_RESALE' ? 'var(--amber-light)' : 'var(--rail-green-light)',
-                                                                    borderRadius: '6px'
-                                                                }}>
-                                                                    {firstTicket.refund_status === 'PENDING_RESALE' && (
-                                                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--amber-dark)', lineHeight: '1.5' }}>
-                                                                            ⏳ Waiting to see if cancelled seat(s) are resold.<br />
-                                                                            Estimated refund if not resold: <strong>৳ {firstTicket.potential_partial_refund ? parseFloat(firstTicket.potential_partial_refund).toFixed(2) : 'TBD'}</strong> (full refund if resold).
-                                                                        </p>
-                                                                    )}
-                                                                    {firstTicket.refund_status === 'PARTIALLY_RESOLD' && (
-                                                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--rail-green-dark)', lineHeight: '1.5' }}>
-                                                                            🔄 Segment partially resold — Refund collected so far: <strong>৳ {parseFloat(firstTicket.refunded_amount || 0).toFixed(2)}</strong>.<br />
-                                                                            Remaining portion waiting to be resold or settled after journey.
-                                                                        </p>
-                                                                    )}
-                                                                    {firstTicket.refund_status === 'RESOLD_FULL_REFUND' && (
-                                                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--rail-green-dark)', lineHeight: '1.5' }}>
-                                                                            ✅ Seat(s) fully resold to another passenger — full refund of <strong>৳ {parseFloat(firstTicket.refunded_amount || firstTicket.price_paid).toFixed(2)}</strong> issued.
-                                                                        </p>
-                                                                    )}
-                                                                    {firstTicket.refund_status === 'EXPIRED_PARTIAL_REFUND' && (
-                                                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--red)', lineHeight: '1.5' }}>
-                                                                            Journey date passed — final refund of <strong>৳ {parseFloat(firstTicket.refunded_amount || 0).toFixed(2)}</strong> issued.
-                                                                        </p>
-                                                                    )}
-                                                                </div>
-                                                            )}
+                                            return (
+                                                <div key={pnr} className={`ticket-stub ${!isGroupActive ? 'is-cancelled' : ''}`}>
+                                                    <div className="ticket-stub-main">
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                                                            <h3 style={{ margin: 0, color: '#2c3e50', fontSize: '17px' }}>
+                                                                {firstTicket.train_name} ({firstTicket.train_number})
+                                                            </h3>
+                                                            {badge && <span className={`badge ${badge.cls}`}>{badge.label}</span>}
                                                         </div>
+                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Journey:</strong> {formatToDisplayDate(firstTicket.journey_date)}</p>
+                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Route:</strong> {firstTicket.start_station} to {firstTicket.end_station}</p>
+                                                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}><strong>Seat(s):</strong> {seatListStr}</p>
+                                                        <p className="pnr" style={{ margin: '8px 0 0 0' }}>PNR: {pnr}</p>
 
-                                                        {isGroupActive && (
-                                                            <>
-                                                                <div className="ticket-stub-tear" />
-                                                                <div className="ticket-stub-side" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                                    <button className="btn btn-amber" onClick={(e) => { e.stopPropagation(); generatePDF(firstTicket); }}>
-                                                                        DOWNLOAD PDF
-                                                                    </button>
-                                                                    {isCancellable(firstTicket.journey_date) ? (
-                                                                        <button className="btn btn-danger" style={{ fontSize: '12px' }} onClick={(e) => { e.stopPropagation(); openCancelModal(ticketGroup); }}>
-                                                                            CANCEL / PARTIAL CANCEL
-                                                                        </button>
-                                                                    ) : (
-                                                                        <div style={{ textAlign: 'center' }}>
-                                                                            <span className="badge badge-partial" style={{ display: 'inline-block', padding: '6px 12px', fontSize: '11px', width: '100%', boxSizing: 'border-box' }}>
-                                                                                EXPIRED
-                                                                            </span>
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            </>
+                                                        {firstTicket.ticket_status === 'CANCELLED' && (
+                                                            <div style={{
+                                                                margin: '14px 0 0 0', padding: '12px',
+                                                                backgroundColor: firstTicket.refund_status === 'PENDING_RESALE' ? 'var(--amber-light)' : 'var(--rail-green-light)',
+                                                                borderRadius: '6px'
+                                                            }}>
+                                                                {firstTicket.refund_status === 'PENDING_RESALE' && (
+                                                                    <p style={{ margin: 0, fontSize: '12px', color: 'var(--amber-dark)', lineHeight: '1.5' }}>
+                                                                        ⏳ Waiting to see if cancelled seat(s) are resold.<br />
+                                                                        Estimated refund if not resold: <strong>৳ {firstTicket.potential_partial_refund ? parseFloat(firstTicket.potential_partial_refund).toFixed(2) : 'TBD'}</strong> (full refund if resold).
+                                                                    </p>
+                                                                )}
+                                                                {firstTicket.refund_status === 'RESOLD_FULL_REFUND' && (
+                                                                    <p style={{ margin: 0, fontSize: '12px', color: 'var(--rail-green-dark)', lineHeight: '1.5' }}>
+                                                                        ✅ Seat(s) resold to another passenger — full refund of <strong>৳ {parseFloat(firstTicket.refunded_amount).toFixed(2)}</strong> issued.
+                                                                    </p>
+                                                                )}
+                                                                {firstTicket.refund_status === 'EXPIRED_PARTIAL_REFUND' && (
+                                                                    <p style={{ margin: 0, fontSize: '12px', color: 'var(--red)', lineHeight: '1.5' }}>
+                                                                        Journey date passed — partial refund of <strong>৳ {parseFloat(firstTicket.refunded_amount).toFixed(2)}</strong> issued after deducting service fee.
+                                                                    </p>
+                                                                )}
+                                                            </div>
                                                         )}
                                                     </div>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
+
+                                                    {isGroupActive && (
+                                                        <>
+                                                            <div className="ticket-stub-tear" />
+                                                            <div className="ticket-stub-side" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                                <button className="btn btn-amber" onClick={(e) => { e.stopPropagation(); generatePDF(firstTicket); }}>
+                                                                    DOWNLOAD PDF
+                                                                </button>
+                                                                {isCancellable(firstTicket.journey_date) ? (
+                                                                    <button className="btn btn-danger" style={{ fontSize: '12px' }} onClick={(e) => { e.stopPropagation(); openCancelModal(ticketGroup); }}>
+                                                                        CANCEL / PARTIAL CANCEL
+                                                                    </button>
+                                                                ) : (
+                                                                    <div style={{ textAlign: 'center' }}>
+                                                                        <span className="badge badge-partial" style={{ display: 'inline-block', padding: '6px 12px', fontSize: '11px', width: '100%', boxSizing: 'border-box' }}>
+                                                                            EXPIRED
+                                                                        </span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         )}
 
@@ -1544,7 +1461,7 @@ export function App() {
                                         </select>
                                     </div>
 
-                                    {/* 3. CUSTOM DATE INPUT */}
+                                    {/* 3. CUSTOM DATE INPUT (DD/MM/YYYY TYPABLE + VISIBLE CALENDAR ICON) */}
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>
                                             Date of Journey (DD/MM/YYYY)
@@ -1611,13 +1528,9 @@ export function App() {
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>Choose Class</label>
                                         <select ref={classInputRef} value={seatClass} onChange={e => setSeatClass(e.target.value)} className="input-field">
-                                            <option value="SNIGDHA">SNIGDHA (AC Chair)</option>
-                                            <option value="S_CHAIR">S_CHAIR (Shovon Chair)</option>
-                                            <option value="AC_B">AC_B (AC Sleeper)</option>
-                                            <option value="AC_S">AC_S (AC Seat)</option>
-                                            <option value="F_BERTH">F_BERTH (First Berth)</option>
-                                            <option value="F_SEAT">F_SEAT (First Seat)</option>
-                                            <option value="F_CHAIR">F_CHAIR (First Chair)</option>
+                                            <option value="Snigdha">Snigdha</option>
+                                            <option value="S_Chair">S_Chair</option>
+                                            <option value="AC_B">AC_B</option>
                                         </select>
                                     </div>
                                 </div>
@@ -1629,7 +1542,7 @@ export function App() {
                     </div>
                 )}
 
-                {/* ================= RESULTS PAGE ================= */}
+                {/* ================= RESULTS PAGE (OFFICIAL BANGLADESH RAILWAY SEARCH RESULT CARDS) ================= */}
                 {view === 'results' && (
                     <div>
                         <div style={{
@@ -1649,31 +1562,41 @@ export function App() {
                         <div style={{ maxWidth: '1200px', margin: '25px auto', padding: '0 20px' }}>
                             {Array.isArray(trains) && trains.length > 0 ? (
                                 trains.map((train) => {
-                                    const trainFares = train.fares || {};
-                                    const availableClasses = Object.keys(trainFares).filter(cls => {
-                                        const f = trainFares[cls];
-                                        return f !== undefined && f !== null && f !== 'N/A' && Number(f) > 0;
-                                    });
+                                    const trainClasses = {
+                                        'SNIGDHA': ['CHA', 'SCHA', 'JA', 'NEO', 'JHA'],
+                                        'AC_S': ['GA', 'GHA', 'UMA'],
+                                        'S_CHAIR': ['THA', 'DA', 'DHA', 'DANT', 'TO', 'THO', 'TA', 'KA'],
+                                        'F_SEAT': ['KHA']
+                                    };
 
-                                    const displayClasses = availableClasses.length > 0
-                                        ? availableClasses
-                                        : Object.keys(DEFAULT_COACHES_BY_CLASS).filter(cls => train.classAvailability && train.classAvailability[cls] !== undefined);
+                                    const getSeatCount = (coach) => {
+                                        if (coach === 'KA') return 15;
+                                        if (['GA', 'GHA', 'UMA', 'KHA'].includes(coach)) return 33;
+                                        if (['CHA', 'SCHA', 'JA', 'NEO', 'JHA'].includes(coach)) return 55;
+                                        return 60;
+                                    };
 
                                     return (
                                         <div key={train.train_id} className="card" style={{ padding: '25px', marginBottom: '25px', border: '1px solid #e2e8f0' }}>
+                                            {/* Train Header Title */}
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                                                 <div>
                                                     <h3 style={{ margin: 0, color: 'var(--amber-dark)', fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.3px' }}>
                                                         {train.train_name.toUpperCase()} ({train.train_number})
                                                     </h3>
+                                                    <div style={{ fontSize: '12px', color: 'var(--rail-green)', fontWeight: '600', marginTop: '4px' }}>
+
+                                                    </div>
                                                 </div>
                                             </div>
 
+                                            {/* Timeline Route Card (Departure Time, Journey Duration, Arrival Time) */}
                                             <div style={{
                                                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                                                 backgroundColor: '#f8fafc', padding: '16px 24px', borderRadius: '8px',
                                                 border: '1px solid #e2e8f0', marginBottom: '20px'
                                             }}>
+                                                {/* Left Departure Info */}
                                                 <div>
                                                     <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b' }}>
                                                         {formatDateShort(journeyDate)}, {formatTimeAMPM(train.start_time)}
@@ -1683,6 +1606,7 @@ export function App() {
                                                     </div>
                                                 </div>
 
+                                                {/* Center Duration Bar */}
                                                 <div style={{ flex: 1, maxWidth: '240px', margin: '0 30px', textAlign: 'center', position: 'relative' }}>
                                                     <div style={{ height: '2px', backgroundColor: '#cbd5e1', width: '100%', position: 'absolute', top: '50%', transform: 'translateY(-50%)' }} />
                                                     <span style={{
@@ -1693,6 +1617,7 @@ export function App() {
                                                     </span>
                                                 </div>
 
+                                                {/* Right Arrival Info */}
                                                 <div>
                                                     <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#1e293b' }}>
                                                         {formatDateShort(journeyDate)}, {formatTimeAMPM(train.end_time)}
@@ -1702,32 +1627,29 @@ export function App() {
                                                     </div>
                                                 </div>
 
+                                                {/* Action Link */}
                                                 <div style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                                                     <span style={{ fontSize: '20px' }}>🪧</span>
                                                     <span style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--rail-green)', marginTop: '2px' }}>Train Details</span>
                                                 </div>
                                             </div>
 
+                                            {/* Seat Class Selection Cards Grid */}
                                             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '20px' }}>
-                                                {displayClasses.map(cls => {
+                                                {Object.keys(trainClasses).map(cls => {
                                                     const isSelectedClass = expandedTrainId === train.train_id && seatClass === cls;
                                                     const classFare = (train.fares && train.fares[cls]) ? train.fares[cls] : 'N/A';
                                                     const classAvail = train.classAvailability ? train.classAvailability[cls] : null;
-                                                    const fromId = getStationIdByName(fromStationName);
-                                                    const toId = getStationIdByName(toStationName);
 
                                                     return (
                                                         <div key={cls} onClick={() => {
                                                             setExpandedTrainId(train.train_id);
                                                             setSeatClass(cls);
                                                             setSelectedSeats([]);
-                                                            const coachesForCls = (coachSummary && coachSummary[cls])
-                                                                ? Object.keys(coachSummary[cls])
-                                                                : (DEFAULT_COACHES_BY_CLASS[cls] || []);
-                                                            const firstCoach = coachesForCls[0] || 'KA';
+                                                            const firstCoach = trainClasses[cls][0];
                                                             setSelectedCoach(firstCoach);
-                                                            fetchCoachSeats(train.train_id, firstCoach, journeyDate, fromId, toId);
-                                                            fetchCoachSummary(train.train_id, journeyDate, fromId, toId);
+                                                            fetchCoachSeats(train.train_id, firstCoach, journeyDate);
+                                                            fetchCoachSummary(train.train_id, journeyDate);
                                                         }} style={{
                                                             border: isSelectedClass ? '2px solid var(--rail-green)' : '1px solid #cbd5e1',
                                                             borderRadius: '8px', padding: '16px', width: '170px',
@@ -1766,6 +1688,7 @@ export function App() {
                                                 })}
                                             </div>
 
+                                            {/* Seat Map View when a Class is Selected */}
                                             {expandedTrainId === train.train_id && seatClass && (
                                                 <div style={{ borderTop: '2px dashed #cbd5e1', paddingTop: '20px', display: 'flex', gap: '40px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
 
@@ -1781,27 +1704,19 @@ export function App() {
                                                                     const newCoach = e.target.value;
                                                                     setSelectedCoach(newCoach);
                                                                     setSelectedSeats([]);
-                                                                    const fromId = getStationIdByName(fromStationName);
-                                                                    const toId = getStationIdByName(toStationName);
-                                                                    fetchCoachSeats(train.train_id, newCoach, journeyDate, fromId, toId);
-                                                                    fetchCoachSummary(train.train_id, journeyDate, fromId, toId);
+                                                                    fetchCoachSeats(train.train_id, newCoach, journeyDate);
+                                                                    fetchCoachSummary(train.train_id, journeyDate);
                                                                 }}
                                                             >
-                                                                {(() => {
-                                                                    const coachesForSelectedClass = (coachSummary && coachSummary[seatClass])
-                                                                        ? Object.keys(coachSummary[seatClass])
-                                                                        : (DEFAULT_COACHES_BY_CLASS[seatClass] || []);
-
-                                                                    return coachesForSelectedClass.map(coach => {
-                                                                        const availInfo = coachSummary[seatClass]?.[coach];
-                                                                        const availCount = availInfo ? availInfo.available : (coach === 'KA' ? 15 : 60);
-                                                                        return (
-                                                                            <option key={coach} value={coach}>
-                                                                                {coach} ({availCount} Seats)
-                                                                            </option>
-                                                                        );
-                                                                    });
-                                                                })()}
+                                                                {trainClasses[seatClass].map(coach => {
+                                                                    const availInfo = coachSummary[seatClass]?.[coach];
+                                                                    const availCount = availInfo ? availInfo.available : getSeatCount(coach);
+                                                                    return (
+                                                                        <option key={coach} value={coach}>
+                                                                            {coach} ({availCount} Seats)
+                                                                        </option>
+                                                                    );
+                                                                })}
                                                             </select>
                                                         </div>
 
@@ -1820,54 +1735,37 @@ export function App() {
                                                         {seatsLoading ? (
                                                             <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><Spinner dark /></div>
                                                         ) : (
-                                                            (() => {
-                                                                const blueprint = COACH_MAPS[selectedCoach] || COACH_MAPS[seatClass] || BLUEPRINT_60_SEAT;
-                                                                const gridCols = blueprint[0] ? blueprint[0].length : 5;
-                                                                const maxSeatInCoach = coachSeats.reduce((max, s) => Math.max(max, Number(s.seat_number) || 0), 0);
+                                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px', maxHeight: '400px', overflowY: 'auto', paddingRight: '10px' }}>
+                                                                {(() => {
+                                                                    const blueprint = COACH_MAPS[seatClass] || COACH_MAPS['S_CHAIR'];
+                                                                    return blueprint.map((row, rowIndex) => (
+                                                                        row.map((seatNumber, colIndex) => {
+                                                                            if (seatNumber === null) {
+                                                                                return <div key={`empty-${rowIndex}-${colIndex}`} className="seat empty-space" />;
+                                                                            }
+                                                                            const dbSeat = coachSeats.find(s => Number(s.seat_number) === seatNumber);
+                                                                            if (!dbSeat) {
+                                                                                return <div key={`loading-${seatNumber}`} className="seat booked" style={{ opacity: 0.3 }}>{seatNumber}</div>;
+                                                                            }
+                                                                            const fullSeatName = `${dbSeat.coach_name}-${dbSeat.seat_number}`;
+                                                                            const isSelected = selectedSeats.some(s => s.id === dbSeat.seat_id);
+                                                                            const isBooked = dbSeat.is_booked === 1 || dbSeat.is_booked === true;
+                                                                            const isPendingLock = dbSeat.is_pending === 1 || dbSeat.is_pending === true;
 
-                                                                return (
-                                                                    <div style={{
-                                                                        display: 'grid',
-                                                                        gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
-                                                                        gap: '12px',
-                                                                        maxHeight: '450px',
-                                                                        overflowY: 'auto',
-                                                                        paddingRight: '10px'
-                                                                    }}>
-                                                                        {blueprint.map((row, rowIndex) => (
-                                                                            row.map((seatNumber, colIndex) => {
-                                                                                if (seatNumber === null) {
-                                                                                    return <div key={`empty-${rowIndex}-${colIndex}`} className="seat empty-space" />;
-                                                                                }
-
-                                                                                if (maxSeatInCoach > 0 && seatNumber > maxSeatInCoach) {
-                                                                                    return <div key={`empty-over-${rowIndex}-${colIndex}`} className="seat empty-space" />;
-                                                                                }
-
-                                                                                const dbSeat = coachSeats.find(s => Number(s.seat_number) === seatNumber);
-                                                                                if (!dbSeat) {
-                                                                                    return <div key={`loading-${seatNumber}`} className="seat booked" style={{ opacity: 0.3 }}>{seatNumber}</div>;
-                                                                                }
-                                                                                const fullSeatName = `${dbSeat.coach_name}-${dbSeat.seat_number}`;
-                                                                                const isSelected = selectedSeats.some(s => s.id === dbSeat.seat_id);
-                                                                                const isBooked = dbSeat.is_booked === 1 || dbSeat.is_booked === true;
-                                                                                const isPendingLock = dbSeat.is_pending === 1 || dbSeat.is_pending === true;
-
-                                                                                return (
-                                                                                    <div
-                                                                                        key={dbSeat.seat_id}
-                                                                                        onClick={() => handleSeatSelect(dbSeat.seat_id, fullSeatName, isBooked)}
-                                                                                        className={`seat ${isBooked ? 'booked' : isPendingLock ? 'pending' : isSelected ? 'selected' : 'available'}`}
-                                                                                        style={{ width: '100%', height: '40px', fontSize: '12px', padding: '0 10px' }}
-                                                                                    >
-                                                                                        {fullSeatName}
-                                                                                    </div>
-                                                                                );
-                                                                            })
-                                                                        ))}
-                                                                    </div>
-                                                                );
-                                                            })()
+                                                                            return (
+                                                                                <div
+                                                                                    key={dbSeat.seat_id}
+                                                                                    onClick={() => handleSeatSelect(dbSeat.seat_id, fullSeatName, isBooked)}
+                                                                                    className={`seat ${isBooked ? 'booked' : isPendingLock ? 'pending' : isSelected ? 'selected' : 'available'}`}
+                                                                                    style={{ width: '100%', height: '40px', fontSize: '12px', padding: '0 10px' }}
+                                                                                >
+                                                                                    {fullSeatName}
+                                                                                </div>
+                                                                            );
+                                                                        })
+                                                                    ));
+                                                                })()}
+                                                            </div>
                                                         )}
                                                     </div>
 
