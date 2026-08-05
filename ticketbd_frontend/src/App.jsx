@@ -1599,13 +1599,13 @@ export function App() {
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>Choose Class</label>
                                         <select ref={classInputRef} value={seatClass} onChange={e => setSeatClass(e.target.value)} className="input-field">
-                                            <option value="SNIGDHA">SNIGDHA (AC Chair)</option>
-                                            <option value="S_CHAIR">S_CHAIR (Shovon Chair)</option>
-                                            <option value="AC_B">AC_B (AC Sleeper)</option>
-                                            <option value="AC_S">AC_S (AC Seat)</option>
-                                            <option value="F_BERTH">F_BERTH (First Berth)</option>
-                                            <option value="F_SEAT">F_SEAT (First Seat)</option>
-                                            <option value="F_CHAIR">F_CHAIR (First Chair)</option>
+                                            <option value="SNIGDHA">SNIGDHA</option>
+                                            <option value="S_CHAIR">S_CHAIR</option>
+                                            <option value="AC_B">AC_B</option>
+                                            <option value="AC_S">AC_S</option>
+                                            <option value="F_BERTH">F_BERTH</option>
+                                            <option value="F_SEAT">F_SEAT</option>
+                                            <option value="F_CHAIR">F_CHAIR</option>
                                         </select>
                                     </div>
                                 </div>
