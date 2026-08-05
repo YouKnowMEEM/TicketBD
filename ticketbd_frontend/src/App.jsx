@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import jsPDF from 'jspdf';
-import './App.css';
+import './index.css';
 
 const API_BASE = 'https://ticketbd-backend.onrender.com';
 
@@ -178,7 +178,7 @@ const calculateDuration = (startTime, endTime) => {
     let startMinutes = h1 * 60 + m1;
     let endMinutes = h2 * 60 + m2;
     if (endMinutes < startMinutes) {
-        endMinutes += 24 * 60; // Overnight
+        endMinutes += 24 * 60;
     }
     const diff = endMinutes - startMinutes;
     const hours = Math.floor(diff / 60);
@@ -320,8 +320,10 @@ export function App() {
             setLockedBookingIds([]);
             setSelectedSeats([]);
             if (expandedTrainId && selectedCoach && journeyDate) {
-                fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate);
-                fetchCoachSummary(expandedTrainId, journeyDate);
+                const fromId = getStationIdByName(fromStationName);
+                const toId = getStationIdByName(toStationName);
+                fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate, fromId, toId);
+                fetchCoachSummary(expandedTrainId, journeyDate, fromId, toId);
             }
         }
         return () => clearInterval(lockTimerRef.current);
@@ -752,20 +754,7 @@ export function App() {
             const response = await fetch(`${API_BASE}/api/trains?fromStation=${fromId}&toStation=${toId}&journeyDate=${journeyDate}`);
             const data = await response.json();
 
-            const todayStr = new Date().toISOString().split('T')[0];
             let filteredTrains = Array.isArray(data) ? data : [];
-
-            if (journeyDate === todayStr) {
-                const now = new Date();
-                const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-                filteredTrains = filteredTrains.filter(train => {
-                    if (!train.start_time) return true;
-                    const [h, m] = train.start_time.split(':').map(Number);
-                    const trainMinutes = h * 60 + m;
-                    return trainMinutes > currentMinutes;
-                });
-            }
 
             setTrains(filteredTrains);
             setExpandedTrainId(null);
@@ -778,10 +767,18 @@ export function App() {
         setSearchLoading(false);
     };
 
-    const fetchCoachSeats = async (targetTrainId, targetCoach, targetDate) => {
+    const fetchCoachSeats = async (targetTrainId, targetCoach, targetDate, fromId, toId) => {
         setSeatsLoading(true);
         try {
-            const response = await fetch(`${API_BASE}/api/seats?trainId=${targetTrainId}&coachName=${targetCoach}&journeyDate=${targetDate}`);
+            const queryParams = new URLSearchParams({
+                trainId: targetTrainId,
+                coachName: targetCoach,
+                journeyDate: targetDate
+            });
+            if (fromId) queryParams.append('startStationId', fromId);
+            if (toId) queryParams.append('endStationId', toId);
+
+            const response = await fetch(`${API_BASE}/api/seats?${queryParams.toString()}`);
             const data = await response.json();
             if (data.success) setCoachSeats(data.seats);
         } catch (err) {
@@ -790,9 +787,16 @@ export function App() {
         setSeatsLoading(false);
     };
 
-    const fetchCoachSummary = async (targetTrainId, targetDate) => {
+    const fetchCoachSummary = async (targetTrainId, targetDate, fromId, toId) => {
         try {
-            const response = await fetch(`${API_BASE}/api/coach-summary?trainId=${targetTrainId}&journeyDate=${targetDate}`);
+            const queryParams = new URLSearchParams({
+                trainId: targetTrainId,
+                journeyDate: targetDate
+            });
+            if (fromId) queryParams.append('startStationId', fromId);
+            if (toId) queryParams.append('endStationId', toId);
+
+            const response = await fetch(`${API_BASE}/api/coach-summary?${queryParams.toString()}`);
             const data = await response.json();
             if (data.success) setCoachSummary(data.summary || {});
         } catch (err) {
@@ -882,8 +886,10 @@ export function App() {
                 setSelectedSeats([]);
                 setLockedBookingIds([]);
                 if (expandedTrainId && selectedCoach && journeyDate) {
-                    fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate);
-                    fetchCoachSummary(expandedTrainId, journeyDate);
+                    const fromId = getStationIdByName(fromStationName);
+                    const toId = getStationIdByName(toStationName);
+                    fetchCoachSeats(expandedTrainId, selectedCoach, journeyDate, fromId, toId);
+                    fetchCoachSummary(expandedTrainId, journeyDate, fromId, toId);
                 }
                 setProfileTab('tickets');
                 loadProfileData();
@@ -936,6 +942,8 @@ export function App() {
         switch (ticket.refund_status) {
             case 'RESOLD_FULL_REFUND':
                 return { label: 'Full refund issued', cls: 'badge-resolved' };
+            case 'PARTIALLY_RESOLD':
+                return { label: 'Partially resold', cls: 'badge-partial' };
             case 'EXPIRED_PARTIAL_REFUND':
                 return { label: 'Partial refund issued', cls: 'badge-partial' };
             default:
@@ -1173,7 +1181,6 @@ export function App() {
                             </div>
                         </div>
 
-                        {/* Static Ticket Return & Refund Policy */}
                         {REFUND_POLICY_BOX}
 
                         <div style={{ display: 'flex', gap: '10px', marginTop: '18px' }}>
@@ -1352,7 +1359,6 @@ export function App() {
 
                         {profileTab === 'tickets' && (
                             <div>
-                                {/* Static Ticket Return & Refund Policy */}
                                 {REFUND_POLICY_BOX}
                                 <div style={{ marginTop: '20px' }}>
                                     {Object.keys(groupedTickets).length === 0 ? (
@@ -1395,14 +1401,20 @@ export function App() {
                                                                             Estimated refund if not resold: <strong>৳ {firstTicket.potential_partial_refund ? parseFloat(firstTicket.potential_partial_refund).toFixed(2) : 'TBD'}</strong> (full refund if resold).
                                                                         </p>
                                                                     )}
+                                                                    {firstTicket.refund_status === 'PARTIALLY_RESOLD' && (
+                                                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--rail-green-dark)', lineHeight: '1.5' }}>
+                                                                            🔄 Segment partially resold — Refund collected so far: <strong>৳ {parseFloat(firstTicket.refunded_amount || 0).toFixed(2)}</strong>.<br />
+                                                                            Remaining portion waiting to be resold or settled after journey.
+                                                                        </p>
+                                                                    )}
                                                                     {firstTicket.refund_status === 'RESOLD_FULL_REFUND' && (
                                                                         <p style={{ margin: 0, fontSize: '12px', color: 'var(--rail-green-dark)', lineHeight: '1.5' }}>
-                                                                            ✅ Seat(s) resold to another passenger — full refund of <strong>৳ {parseFloat(firstTicket.refunded_amount).toFixed(2)}</strong> issued.
+                                                                            ✅ Seat(s) fully resold to another passenger — full refund of <strong>৳ {parseFloat(firstTicket.refunded_amount || firstTicket.price_paid).toFixed(2)}</strong> issued.
                                                                         </p>
                                                                     )}
                                                                     {firstTicket.refund_status === 'EXPIRED_PARTIAL_REFUND' && (
                                                                         <p style={{ margin: 0, fontSize: '12px', color: 'var(--red)', lineHeight: '1.5' }}>
-                                                                            Journey date passed — partial refund of <strong>৳ {parseFloat(firstTicket.refunded_amount).toFixed(2)}</strong> issued after deducting service fee.
+                                                                            Journey date passed — final refund of <strong>৳ {parseFloat(firstTicket.refunded_amount || 0).toFixed(2)}</strong> issued.
                                                                         </p>
                                                                     )}
                                                                 </div>
@@ -1532,7 +1544,7 @@ export function App() {
                                         </select>
                                     </div>
 
-                                    {/* 3. CUSTOM DATE INPUT (DD/MM/YYYY TYPABLE + VISIBLE CALENDAR ICON) */}
+                                    {/* 3. CUSTOM DATE INPUT */}
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>
                                             Date of Journey (DD/MM/YYYY)
@@ -1599,13 +1611,13 @@ export function App() {
                                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                                         <label style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px', color: '#333' }}>Choose Class</label>
                                         <select ref={classInputRef} value={seatClass} onChange={e => setSeatClass(e.target.value)} className="input-field">
-                                            <option value="SNIGDHA">SNIGDHA</option>
-                                            <option value="S_CHAIR">S_CHAIR</option>
-                                            <option value="AC_B">AC_B</option>
-                                            <option value="AC_S">AC_S</option>
-                                            <option value="F_BERTH">F_BERTH</option>
-                                            <option value="F_SEAT">F_SEAT</option>
-                                            <option value="F_CHAIR">F_CHAIR</option>
+                                            <option value="SNIGDHA">SNIGDHA (AC Chair)</option>
+                                            <option value="S_CHAIR">S_CHAIR (Shovon Chair)</option>
+                                            <option value="AC_B">AC_B (AC Sleeper)</option>
+                                            <option value="AC_S">AC_S (AC Seat)</option>
+                                            <option value="F_BERTH">F_BERTH (First Berth)</option>
+                                            <option value="F_SEAT">F_SEAT (First Seat)</option>
+                                            <option value="F_CHAIR">F_CHAIR (First Chair)</option>
                                         </select>
                                     </div>
                                 </div>
@@ -1617,7 +1629,7 @@ export function App() {
                     </div>
                 )}
 
-                {/* ================= RESULTS PAGE (OFFICIAL BANGLADESH RAILWAY SEARCH RESULT CARDS) ================= */}
+                {/* ================= RESULTS PAGE ================= */}
                 {view === 'results' && (
                     <div>
                         <div style={{
@@ -1649,7 +1661,6 @@ export function App() {
 
                                     return (
                                         <div key={train.train_id} className="card" style={{ padding: '25px', marginBottom: '25px', border: '1px solid #e2e8f0' }}>
-                                            {/* Train Header Title */}
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                                                 <div>
                                                     <h3 style={{ margin: 0, color: 'var(--amber-dark)', fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.3px' }}>
@@ -1658,7 +1669,6 @@ export function App() {
                                                 </div>
                                             </div>
 
-                                            {/* Timeline Route Card */}
                                             <div style={{
                                                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                                                 backgroundColor: '#f8fafc', padding: '16px 24px', borderRadius: '8px',
@@ -1698,12 +1708,13 @@ export function App() {
                                                 </div>
                                             </div>
 
-                                            {/* Seat Class Selection Cards Grid */}
                                             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '20px' }}>
                                                 {displayClasses.map(cls => {
                                                     const isSelectedClass = expandedTrainId === train.train_id && seatClass === cls;
                                                     const classFare = (train.fares && train.fares[cls]) ? train.fares[cls] : 'N/A';
                                                     const classAvail = train.classAvailability ? train.classAvailability[cls] : null;
+                                                    const fromId = getStationIdByName(fromStationName);
+                                                    const toId = getStationIdByName(toStationName);
 
                                                     return (
                                                         <div key={cls} onClick={() => {
@@ -1715,8 +1726,8 @@ export function App() {
                                                                 : (DEFAULT_COACHES_BY_CLASS[cls] || []);
                                                             const firstCoach = coachesForCls[0] || 'KA';
                                                             setSelectedCoach(firstCoach);
-                                                            fetchCoachSeats(train.train_id, firstCoach, journeyDate);
-                                                            fetchCoachSummary(train.train_id, journeyDate);
+                                                            fetchCoachSeats(train.train_id, firstCoach, journeyDate, fromId, toId);
+                                                            fetchCoachSummary(train.train_id, journeyDate, fromId, toId);
                                                         }} style={{
                                                             border: isSelectedClass ? '2px solid var(--rail-green)' : '1px solid #cbd5e1',
                                                             borderRadius: '8px', padding: '16px', width: '170px',
@@ -1755,13 +1766,11 @@ export function App() {
                                                 })}
                                             </div>
 
-                                            {/* Seat Map View when a Class is Selected */}
                                             {expandedTrainId === train.train_id && seatClass && (
                                                 <div style={{ borderTop: '2px dashed #cbd5e1', paddingTop: '20px', display: 'flex', gap: '40px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
 
                                                     <div style={{ backgroundColor: '#f8fafc', padding: '25px', borderRadius: '12px', border: '1px solid #e2e8f0', width: 'fit-content' }}>
 
-                                                        {/* Coach Dropdown */}
                                                         <div style={{ marginBottom: '20px' }}>
                                                             <label style={{ fontSize: '14px', fontWeight: 'bold', color: '#2c3e50', display: 'block', marginBottom: '8px' }}>Select Coach</label>
                                                             <select
@@ -1772,8 +1781,10 @@ export function App() {
                                                                     const newCoach = e.target.value;
                                                                     setSelectedCoach(newCoach);
                                                                     setSelectedSeats([]);
-                                                                    fetchCoachSeats(train.train_id, newCoach, journeyDate);
-                                                                    fetchCoachSummary(train.train_id, journeyDate);
+                                                                    const fromId = getStationIdByName(fromStationName);
+                                                                    const toId = getStationIdByName(toStationName);
+                                                                    fetchCoachSeats(train.train_id, newCoach, journeyDate, fromId, toId);
+                                                                    fetchCoachSummary(train.train_id, journeyDate, fromId, toId);
                                                                 }}
                                                             >
                                                                 {(() => {
